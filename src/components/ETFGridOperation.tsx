@@ -18,6 +18,14 @@ interface GridPoint {
   percentage: number;
   operation: string;
   gridType?: string;
+  buyAmount?: number;
+  buyCount?: number;
+  sellAmount?: number;
+  sellCount?: number;
+  profits?: number;
+  returnRate?: string;
+  retainedProfits?: number;
+  retainedCount?: number;
 }
 
 interface GridStrategy {
@@ -66,6 +74,9 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
   const [enableLargeGrid, setEnableLargeGrid] = useState<boolean>(false);
   const [mediumGridMultiplier, setMediumGridMultiplier] = useState<number>(3);
   const [largeGridMultiplier, setLargeGridMultiplier] = useState<number>(5);
+  const [retainedProfitsRatio, setRetainedProfitsRatio] = useState<number>(0);
+  const [maxPercentOfDecline, setMaxPercentOfDecline] = useState<number>(60);
+  const [enableMaxDeclineLimit, setEnableMaxDeclineLimit] = useState<boolean>(false);
 
   // 当净值数据变化时，自动设置初始价格
   useEffect(() => {
@@ -84,21 +95,62 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
 
     const gridPoints: GridPoint[] = [];
     
+    // 计算最小档位比例（基于最大下跌幅度限制）
+    const minGearPercentage = enableMaxDeclineLimit 
+      ? -maxPercentOfDecline  // 负值表示下跌幅度
+      : -Infinity;  // 没有限制
+    
     // 生成所有的网格点位
     if (strategyType === 'symmetric') {
       // 对称网格策略
       // 小网格
       for (let i = -gridCount; i <= gridCount; i++) {
         const percentage = i * gridWidth;
+        
+        // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+        if (percentage < minGearPercentage) continue;
+        
         const price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
         const operation = percentage < 0 ? '买入' : percentage > 0 ? '卖出' : '起始点';
         
-        gridPoints.push({
+        const point: GridPoint = {
           price,
           percentage,
           operation,
           gridType: '小网格'
-        });
+        };
+
+        // 计算买卖相关数据
+        if (operation === '买入') {
+          // 买入情况
+          point.buyAmount = investmentPerGrid;
+          // 按照100份整数买入
+          point.buyCount = Math.floor(point.buyAmount / price / 100) * 100; 
+          // 调整实际买入金额
+          point.buyAmount = point.buyCount * price; 
+        } else if (operation === '卖出' && i > 0) {
+          // 卖出情况，计算留存利润
+          const buyPrice = initialPrice * (1 - percentage / 100); // 对应买入价格
+          point.buyAmount = investmentPerGrid;
+          point.buyCount = Math.floor(point.buyAmount / buyPrice / 100) * 100;
+          point.buyAmount = point.buyCount * buyPrice;
+          
+          point.sellAmount = point.buyCount * price;
+          point.profits = point.sellAmount - point.buyAmount;
+          point.returnRate = ((point.profits / point.buyAmount) * 100).toFixed(2) + '%';
+          
+          // 留存利润相关计算
+          point.retainedProfits = point.profits * retainedProfitsRatio;
+          // 按照100份整数卖出
+          point.sellCount = Math.floor((point.sellAmount - point.retainedProfits) / price / 100) * 100;
+          // 调整实际卖出金额
+          point.sellAmount = point.sellCount * price;
+          // 调整实际留存利润
+          point.retainedProfits = point.sellAmount - point.buyAmount - (point.sellCount * price);
+          point.retainedCount = point.retainedProfits > 0 ? point.retainedProfits / price : 0;
+        }
+        
+        gridPoints.push(point);
       }
       
       // 中网格
@@ -108,15 +160,43 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           if (i === 0) continue;
           
           const percentage = i * gridWidth * mediumGridMultiplier;
+          
+          // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+          if (percentage < minGearPercentage) continue;
+          
           const price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
           const operation = percentage < 0 ? '买入' : '卖出';
           
-          gridPoints.push({
+          const point: GridPoint = {
             price,
             percentage,
             operation,
             gridType: '中网格'
-          });
+          };
+          
+          // 计算买卖相关数据
+          if (operation === '买入') {
+            point.buyAmount = investmentPerGrid * mediumGridMultiplier;
+            point.buyCount = Math.floor(point.buyAmount / price / 100) * 100;
+            point.buyAmount = point.buyCount * price;
+          } else if (operation === '卖出') {
+            const buyPrice = initialPrice * (1 - percentage / 100);
+            point.buyAmount = investmentPerGrid * mediumGridMultiplier;
+            point.buyCount = Math.floor(point.buyAmount / buyPrice / 100) * 100;
+            point.buyAmount = point.buyCount * buyPrice;
+            
+            point.sellAmount = point.buyCount * price;
+            point.profits = point.sellAmount - point.buyAmount;
+            point.returnRate = ((point.profits / point.buyAmount) * 100).toFixed(2) + '%';
+            
+            point.retainedProfits = point.profits * retainedProfitsRatio;
+            point.sellCount = Math.floor((point.sellAmount - point.retainedProfits) / price / 100) * 100;
+            point.sellAmount = point.sellCount * price;
+            point.retainedProfits = point.sellAmount - point.buyAmount - (point.sellCount * price);
+            point.retainedCount = point.retainedProfits > 0 ? point.retainedProfits / price : 0;
+          }
+          
+          gridPoints.push(point);
         }
       }
       
@@ -127,15 +207,43 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           if (i === 0) continue;
           
           const percentage = i * gridWidth * largeGridMultiplier;
+          
+          // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+          if (percentage < minGearPercentage) continue;
+          
           const price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
           const operation = percentage < 0 ? '买入' : '卖出';
           
-          gridPoints.push({
+          const point: GridPoint = {
             price,
             percentage,
             operation,
             gridType: '大网格'
-          });
+          };
+          
+          // 计算买卖相关数据
+          if (operation === '买入') {
+            point.buyAmount = investmentPerGrid * largeGridMultiplier;
+            point.buyCount = Math.floor(point.buyAmount / price / 100) * 100;
+            point.buyAmount = point.buyCount * price;
+          } else if (operation === '卖出') {
+            const buyPrice = initialPrice * (1 - percentage / 100);
+            point.buyAmount = investmentPerGrid * largeGridMultiplier;
+            point.buyCount = Math.floor(point.buyAmount / buyPrice / 100) * 100;
+            point.buyAmount = point.buyCount * buyPrice;
+            
+            point.sellAmount = point.buyCount * price;
+            point.profits = point.sellAmount - point.buyAmount;
+            point.returnRate = ((point.profits / point.buyAmount) * 100).toFixed(2) + '%';
+            
+            point.retainedProfits = point.profits * retainedProfitsRatio;
+            point.sellCount = Math.floor((point.sellAmount - point.retainedProfits) / price / 100) * 100;
+            point.sellAmount = point.sellCount * price;
+            point.retainedProfits = point.sellAmount - point.buyAmount - (point.sellCount * price);
+            point.retainedCount = point.retainedProfits > 0 ? point.retainedProfits / price : 0;
+          }
+          
+          gridPoints.push(point);
         }
       }
     } else {
@@ -143,30 +251,54 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       // 小网格
       for (let i = 0; i <= gridCount; i++) {
         const percentage = -i * gridWidth;
+        
+        // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+        if (percentage < minGearPercentage) continue;
+        
         const price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
         const operation = i === 0 ? '起始点' : '买入';
         
-        gridPoints.push({
+        const point: GridPoint = {
           price,
           percentage,
           operation,
           gridType: '小网格'
-        });
+        };
+        
+        // 计算买卖相关数据
+        if (operation === '买入') {
+          point.buyAmount = investmentPerGrid;
+          point.buyCount = Math.floor(point.buyAmount / price / 100) * 100;
+          point.buyAmount = point.buyCount * price;
+        }
+        
+        gridPoints.push(point);
       }
       
       // 中网格
       if (enableMediumGrid) {
         for (let i = 1; i <= gridCount; i++) { // 从1开始，跳过起始点
           const percentage = -i * gridWidth * mediumGridMultiplier;
+          
+          // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+          if (percentage < minGearPercentage) continue;
+          
           const price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
           const operation = '买入';
           
-          gridPoints.push({
+          const point: GridPoint = {
             price,
             percentage,
             operation,
             gridType: '中网格'
-          });
+          };
+          
+          // 计算买入相关数据
+          point.buyAmount = investmentPerGrid * mediumGridMultiplier;
+          point.buyCount = Math.floor(point.buyAmount / price / 100) * 100;
+          point.buyAmount = point.buyCount * price;
+          
+          gridPoints.push(point);
         }
       }
       
@@ -174,15 +306,26 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       if (enableLargeGrid) {
         for (let i = 1; i <= gridCount; i++) { // 从1开始，跳过起始点
           const percentage = -i * gridWidth * largeGridMultiplier;
+          
+          // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+          if (percentage < minGearPercentage) continue;
+          
           const price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
           const operation = '买入';
           
-          gridPoints.push({
+          const point: GridPoint = {
             price,
             percentage,
             operation,
             gridType: '大网格'
-          });
+          };
+          
+          // 计算买入相关数据
+          point.buyAmount = investmentPerGrid * largeGridMultiplier;
+          point.buyCount = Math.floor(point.buyAmount / price / 100) * 100;
+          point.buyAmount = point.buyCount * price;
+          
+          gridPoints.push(point);
         }
       }
     }
@@ -220,6 +363,9 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       valueLine: [],
     };
 
+    // 用于跟踪留存份额
+    let retainedShares = 0;
+
     // 按照网格点位进行回测
     sortedData.forEach((item, index) => {
       const currentDate = item.FSRQ;
@@ -253,15 +399,19 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           if (point.operation === '买入') {
             // 买入操作
             const actualInvestment = gridStrategy.investmentPerGrid * multiplier;
-            const shares = actualInvestment / currentPrice;
-            results.totalInvestment += actualInvestment;
+            // 必须按100份整数买入
+            const shares = Math.floor(actualInvestment / currentPrice / 100) * 100;
+            // 调整实际投资金额
+            const adjustedInvestment = shares * currentPrice;
+            
+            results.totalInvestment += adjustedInvestment;
             results.totalShares += shares;
             
             results.transactions.push({
               date: currentDate,
               price: currentPrice,
               operation: '买入',
-              amount: actualInvestment,
+              amount: adjustedInvestment,
               shares,
               gridLevel: point.percentage,
               gridType: point.gridType
@@ -269,26 +419,54 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           } else if (point.operation === '卖出' && results.totalShares > 0) {
             // 卖出操作 - 卖出当前持有份额的一部分
             const sharesToSell = results.totalShares / (gridCount + 1) * multiplier;
-            const sellAmount = sharesToSell * currentPrice;
+            // 必须按100份整数卖出
+            const adjustedSharesToSell = Math.floor(sharesToSell / 100) * 100;
+            const sellAmount = adjustedSharesToSell * currentPrice;
+            const profits = sellAmount - (adjustedSharesToSell * results.totalInvestment / results.totalShares);
             
-            results.totalShares -= sharesToSell;
-            results.totalInvestment -= sellAmount;
+            // 留存部分利润对应的份额
+            const retainedProfit = profits * retainedProfitsRatio;
+            // 计算实际卖出份额（考虑留存利润）
+            const actualSharesToSell = Math.floor((adjustedSharesToSell - retainedProfit / currentPrice) / 100) * 100;
+            const actualSellAmount = actualSharesToSell * currentPrice;
             
-            results.transactions.push({
-              date: currentDate,
-              price: currentPrice,
-              operation: '卖出',
-              amount: sellAmount,
-              shares: sharesToSell,
-              gridLevel: point.percentage,
-              gridType: point.gridType
-            });
+            if (actualSharesToSell > 0) {
+              results.totalShares -= actualSharesToSell;
+              results.totalInvestment -= (actualSharesToSell * results.totalInvestment / (results.totalShares + actualSharesToSell));
+              
+              results.transactions.push({
+                date: currentDate,
+                price: currentPrice,
+                operation: '卖出',
+                amount: actualSellAmount,
+                shares: actualSharesToSell,
+                gridLevel: point.percentage,
+                gridType: point.gridType
+              });
+              
+              // 记录留存利润
+              const actualRetainedProfit = sellAmount - actualSellAmount;
+              if (actualRetainedProfit > 0) {
+                const actualRetainedShares = Math.floor(actualRetainedProfit / currentPrice / 100) * 100;
+                retainedShares += actualRetainedShares;
+                
+                results.transactions.push({
+                  date: currentDate,
+                  price: currentPrice,
+                  operation: '留存利润',
+                  amount: actualRetainedProfit,
+                  shares: actualRetainedShares,
+                  gridLevel: point.percentage,
+                  gridType: point.gridType
+                });
+              }
+            }
           }
         }
       });
       
-      // 更新当前总价值
-      results.totalValue = results.totalShares * currentPrice;
+      // 更新当前总价值（包括留存份额）
+      results.totalValue = (results.totalShares + retainedShares) * currentPrice;
       
       // 记录投资曲线和价值曲线
       results.investmentLine.push(results.totalInvestment);
@@ -341,14 +519,24 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       title: '投资金额',
       key: 'investment',
       render: (_: any, record: GridPoint) => {
-        const multiplier = record.gridType === '中网格' ? mediumGridMultiplier 
-                         : record.gridType === '大网格' ? largeGridMultiplier
-                         : 1;
-        return record.operation === '买入' 
-               ? `¥${investmentPerGrid * multiplier}` 
-               : record.operation === '卖出' ? '按份额比例' : '-';
+        if (record.operation === '买入' && record.buyAmount) {
+          return `¥${record.buyAmount.toFixed(2)} (${record.buyCount}份)`;
+        } else if (record.operation === '卖出' && record.sellAmount) {
+          return `¥${record.sellAmount.toFixed(2)} (${record.sellCount}份)`;
+        }
+        return '-';
       }
     },
+    {
+      title: '留存利润',
+      key: 'retained',
+      render: (_: any, record: GridPoint) => {
+        if (record.operation === '卖出' && record.retainedProfits && record.retainedProfits > 0) {
+          return `¥${record.retainedProfits.toFixed(2)} (${record.retainedCount?.toFixed(2)}份)`;
+        }
+        return '-';
+      }
+    }
   ];
 
   // 回测结果表格列定义
@@ -369,7 +557,7 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       key: 'operation',
       render: (text: string) => (
         <Text 
-          type={text === '买入' ? 'success' : 'danger'}
+          type={text === '买入' ? 'success' : text === '卖出' ? 'danger' : 'warning'}
         >
           {text}
         </Text>
@@ -516,6 +704,11 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
               <Option value="symmetric">对称网格(上涨卖出/下跌买入)</Option>
               <Option value="downward">单向下跌网格(只买入)</Option>
             </Select>
+            {strategyType === 'symmetric' && (
+              <span className="text-xs text-gray-500">
+                选择对称或单项下跌网格
+              </span>
+            )}
           </div>
           
           <div className="mb-4">
@@ -578,8 +771,46 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
               style={{ width: '100%' }}
             />
             <span className="text-xs text-gray-500">
-              触发买入网格时的投资金额
+              触发买入网格时的投资金额（场内基金必须按100份整数委托）
             </span>
+          </div>
+          
+          <div className="mb-4">
+            <label className="block text-sm font-medium mb-1">留存利润比例</label>
+            <InputNumber
+              min={0}
+              max={1}
+              step={0.1}
+              value={retainedProfitsRatio}
+              onChange={value => setRetainedProfitsRatio(value || 0)}
+              style={{ width: '100%' }}
+            />
+            <span className="text-xs text-gray-500">
+              卖出时保留的利润比例（0-1之间，0表示不保留，1表示全部保留）
+            </span>
+          </div>
+          
+          <div className="mb-4">
+            <div className="flex items-center justify-between">
+              <label className="block text-sm font-medium mb-1">限制最大下跌幅度</label>
+              <Switch checked={enableMaxDeclineLimit} onChange={setEnableMaxDeclineLimit} />
+            </div>
+            {enableMaxDeclineLimit && (
+              <div className="mt-2">
+                <label className="block text-xs text-gray-500 mb-1">最大下跌幅度(%)</label>
+                <InputNumber
+                  min={10}
+                  max={90}
+                  step={5}
+                  value={maxPercentOfDecline}
+                  onChange={value => setMaxPercentOfDecline(value || 60)}
+                  style={{ width: '100%' }}
+                />
+                <span className="text-xs text-gray-500">
+                  限制网格策略的最大下跌幅度，在初始价格以下超过此幅度的价格不再设置网格
+                </span>
+              </div>
+            )}
           </div>
         </div>
         
@@ -661,6 +892,31 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
         columns={columns}
         pagination={false}
         size="small"
+        summary={(pageData) => {
+          if (pageData.length === 0) return null;
+          
+          // 计算总买入金额
+          const totalBuyAmount = pageData
+            .filter(item => item.operation === '买入' && item.buyAmount)
+            .reduce((sum, item) => sum + (item.buyAmount || 0), 0);
+            
+          // 计算网格点数量
+          const gridPointsCount = pageData.length;
+          
+          return (
+            <>
+              <Table.Summary.Row>
+                <Table.Summary.Cell index={0} colSpan={4}>
+                  <Text strong>总计 ({gridPointsCount}个网格点)</Text>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={1}>
+                  <Text strong>{totalBuyAmount > 0 ? `¥${totalBuyAmount.toFixed(2)}` : '-'}</Text>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={2}></Table.Summary.Cell>
+              </Table.Summary.Row>
+            </>
+          );
+        }}
       />
       
       <Alert
@@ -671,6 +927,10 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
             <p>1. 当价格下跌到买入网格时，以设定金额买入</p>
             <p>2. 当价格上涨到卖出网格时，卖出部分份额获利</p>
             <p>3. 适合震荡行情，不适合单边趋势市场</p>
+            <p>4. 场内基金交易必须按照100份的整数倍进行委托</p>
+            {enableMaxDeclineLimit && (
+              <p>5. 已设置最大下跌幅度限制为{maxPercentOfDecline}%，超过此幅度不再设置网格</p>
+            )}
           </>
         }
         type="info"
