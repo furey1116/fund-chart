@@ -6,71 +6,45 @@ interface DatabaseDriver {
   getFundOperations(fundCode: string): Promise<FundOperation[]>;
 }
 
-// Vercel Blob 数据库驱动实现
-class VercelBlobDriver implements DatabaseDriver {
-  private async getBlob(fundCode: string): Promise<FundOperation[]> {
-    try {
-      // 动态导入 @vercel/blob 包，避免在本地环境中报错
-      const vercelBlob = await import('@vercel/blob');
-      
-      interface BlobItem {
-        url: string;
-        uploadedAt: string;
-        pathname: string;
-      }
-      
-      // 查找该基金的所有操作记录文件
-      const { blobs } = await vercelBlob.list({
-        prefix: `fundOperations/${fundCode}/`,
-      });
-      
-      if (blobs.length === 0) {
-        return [];
-      }
-      
-      // 获取最新的操作记录文件
-      const latestBlob = (blobs as BlobItem[]).sort((a, b) => 
-        new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
-      )[0];
-      
-      // 获取文件内容
-      const response = await fetch(latestBlob.url);
-      if (!response.ok) return [];
-      
-      const text = await response.text();
-      return JSON.parse(text) as FundOperation[];
-    } catch (error) {
-      console.error('Failed to get data from Vercel Blob:', error);
-      return [];
-    }
-  }
-  
+// 使用API路由的Vercel Blob数据库驱动
+class ApiRouteDriver implements DatabaseDriver {
   async saveFundOperation(operation: FundOperation): Promise<boolean> {
     try {
-      // 获取现有操作记录
-      const existingOperations = await this.getFundOperations(operation.fundCode);
-      
-      // 添加新操作
-      const updatedOperations = [...existingOperations, operation];
-      
-      // 动态导入 @vercel/blob 包
-      const vercelBlob = await import('@vercel/blob');
-      
-      // 保存更新后的操作记录
-      const fileName = `fundOperations/${operation.fundCode}/${Date.now()}.json`;
-      await vercelBlob.put(fileName, JSON.stringify(updatedOperations), {
-        access: 'public',
+      // 通过API路由保存操作记录
+      const response = await fetch('/api/fund-operations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(operation),
       });
       
-      return true;
+      if (!response.ok) {
+        throw new Error(`保存失败: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      return result.success === true;
     } catch (error) {
-      console.error('Failed to save to Vercel Blob:', error);
+      console.error('Failed to save operation via API:', error);
       return false;
     }
   }
   
   async getFundOperations(fundCode: string): Promise<FundOperation[]> {
-    return await this.getBlob(fundCode);
+    try {
+      // 通过API路由获取操作记录
+      const response = await fetch(`/api/fund-operations?fundCode=${fundCode}`);
+      
+      if (!response.ok) {
+        throw new Error(`获取失败: ${response.status}`);
+      }
+      
+      return await response.json() as FundOperation[];
+    } catch (error) {
+      console.error('Failed to get operations via API:', error);
+      return [];
+    }
   }
 }
 
@@ -115,17 +89,25 @@ class LocalStorageDriver implements DatabaseDriver {
 
 // 工厂函数，根据环境返回适当的数据库驱动
 export function getDatabaseDriver(): DatabaseDriver {
-  // 检查是否在 Vercel 环境中（通过环境变量判断）
-  const isVercelEnvironment = process.env.NEXT_PUBLIC_VERCEL_ENV || 
-                             process.env.VERCEL_ENV;
-  
-  // 如果是在浏览器环境中运行且不是Vercel环境，使用localStorage
-  if (typeof window !== 'undefined' && !isVercelEnvironment) {
-    return new LocalStorageDriver();
+  // 检查是否在浏览器环境中运行
+  if (typeof window === 'undefined') {
+    // 服务器端不能使用localStorage，返回API路由驱动
+    return new ApiRouteDriver();
   }
   
-  // 否则使用Vercel Blob存储
-  return new VercelBlobDriver();
+  // 检查是否在Vercel环境或者生产环境
+  const isVercelOrProduction = 
+    process.env.NEXT_PUBLIC_VERCEL_ENV || 
+    process.env.VERCEL_ENV || 
+    process.env.NODE_ENV === 'production';
+  
+  // 如果是Vercel或生产环境，使用API路由驱动
+  if (isVercelOrProduction) {
+    return new ApiRouteDriver();
+  }
+  
+  // 本地开发环境使用localStorage
+  return new LocalStorageDriver();
 }
 
 // 导出统一的数据库接口函数

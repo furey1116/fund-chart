@@ -112,5 +112,7 @@ npx vercel blob generate-read-write-token
 4. 操作记录会显示在底部的表格中
 
 操作记录数据会根据部署环境不同存储在：
-- Vercel 环境：Vercel Blob 存储服务中
-- 本地环境：浏览器 localStorage 中 
+- Vercel 环境：通过API路由间接存储在Vercel Blob中
+- 本地环境：浏览器 localStorage 中
+
+> 注意：为了解决CORS问题，系统使用Next.js API路由间接访问Vercel Blob存储服务，而不是从浏览器直接访问。 
