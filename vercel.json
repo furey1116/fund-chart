@@ -1,0 +1,10 @@
+{
+  "buildCommand": "next build",
+  "devCommand": "next dev",
+  "framework": "nextjs",
+  "outputDirectory": ".next",
+  "crons": [],
+  "env": {
+    "BLOB_READ_WRITE_TOKEN": "${BLOB_READ_WRITE_TOKEN}"
+  }
+} 

@@ -11,10 +11,16 @@ class VercelBlobDriver implements DatabaseDriver {
   private async getBlob(fundCode: string): Promise<FundOperation[]> {
     try {
       // 动态导入 @vercel/blob 包，避免在本地环境中报错
-      const { list, get } = await import('@vercel/blob');
+      const vercelBlob = await import('@vercel/blob');
+      
+      interface BlobItem {
+        url: string;
+        uploadedAt: string;
+        pathname: string;
+      }
       
       // 查找该基金的所有操作记录文件
-      const { blobs } = await list({
+      const { blobs } = await vercelBlob.list({
         prefix: `fundOperations/${fundCode}/`,
       });
       
@@ -23,14 +29,15 @@ class VercelBlobDriver implements DatabaseDriver {
       }
       
       // 获取最新的操作记录文件
-      const latestBlob = blobs.sort((a, b) => 
+      const latestBlob = (blobs as BlobItem[]).sort((a, b) => 
         new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
       )[0];
       
-      const result = await get(latestBlob.url);
-      if (!result) return [];
+      // 获取文件内容
+      const response = await fetch(latestBlob.url);
+      if (!response.ok) return [];
       
-      const text = await result.text();
+      const text = await response.text();
       return JSON.parse(text) as FundOperation[];
     } catch (error) {
       console.error('Failed to get data from Vercel Blob:', error);
@@ -47,11 +54,11 @@ class VercelBlobDriver implements DatabaseDriver {
       const updatedOperations = [...existingOperations, operation];
       
       // 动态导入 @vercel/blob 包
-      const { put } = await import('@vercel/blob');
+      const vercelBlob = await import('@vercel/blob');
       
       // 保存更新后的操作记录
       const fileName = `fundOperations/${operation.fundCode}/${Date.now()}.json`;
-      await put(fileName, JSON.stringify(updatedOperations), {
+      await vercelBlob.put(fileName, JSON.stringify(updatedOperations), {
         access: 'public',
       });
       
