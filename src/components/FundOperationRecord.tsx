@@ -1,21 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Form, 
-  Input, 
-  Button, 
-  DatePicker, 
-  Select, 
-  InputNumber, 
-  Table, 
-  message, 
-  Card, 
-  Typography,
-  Divider 
-} from 'antd';
+import {   Form,   Input,   Button,   DatePicker,   Select,   InputNumber,   Table,   message,   Card,   Typography,  Divider,  Popconfirm,  Space} from 'antd';
 import dayjs from 'dayjs';
 import type { TableProps } from 'antd';
 import { FundOperation, createFundOperation } from '@/types/fundOperation';
-import { saveFundOperation, getFundOperations } from '@/lib/db';
+import {   saveFundOperation as dbSaveFundOperation,   getFundOperations as dbGetFundOperations,  deleteFundOperation as dbDeleteFundOperation} from '@/lib/db';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -41,7 +29,7 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
   const loadOperations = async () => {
     setLoading(true);
     try {
-      const data = await getFundOperations(fundCode);
+      const data = await dbGetFundOperations(fundCode);
       setOperations(data);
       
       // 计算当前持有份额
@@ -108,7 +96,7 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
       });
       
       // 保存操作记录
-      const success = await saveFundOperation(operation);
+      const success = await dbSaveFundOperation(operation);
       
       if (success) {
         message.success('操作记录已保存');
@@ -120,6 +108,26 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
     } catch (error) {
       console.error('保存操作记录失败:', error);
       message.error('保存操作记录失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  // 删除操作记录
+  const handleDelete = async (operationId: string) => {
+    setLoading(true);
+    try {
+      const success = await dbDeleteFundOperation(fundCode, operationId);
+      
+      if (success) {
+        message.success('操作记录已删除');
+        loadOperations();
+      } else {
+        message.error('删除操作记录失败');
+      }
+    } catch (error) {
+      console.error('删除操作记录失败:', error);
+      message.error('删除操作记录失败');
     } finally {
       setLoading(false);
     }
@@ -184,6 +192,21 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
       dataIndex: 'remark',
       key: 'remark',
       ellipsis: true,
+    },
+    {
+      title: '操作',
+      key: 'action',
+      render: (_, record) => (
+        <Popconfirm
+          title="删除操作记录"
+          description="确定要删除这条操作记录吗？此操作不可恢复。"
+          onConfirm={() => handleDelete(record.id)}
+          okText="确定"
+          cancelText="取消"
+        >
+          <Button type="link" danger>删除</Button>
+        </Popconfirm>
+      ),
     },
   ];
 
@@ -320,11 +343,11 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
               <Table.Summary.Cell index={3}>
                 <Text strong>{holdingShares.toLocaleString()}</Text>
               </Table.Summary.Cell>
-              <Table.Summary.Cell index={4} colSpan={3}></Table.Summary.Cell>
-              <Table.Summary.Cell index={7}>
+              <Table.Summary.Cell index={4} colSpan={4}></Table.Summary.Cell>
+              <Table.Summary.Cell index={8}>
                 <Text strong>¥{marketValue.toFixed(2)}</Text>
               </Table.Summary.Cell>
-              <Table.Summary.Cell index={8}></Table.Summary.Cell>
+              <Table.Summary.Cell index={9}></Table.Summary.Cell>
             </Table.Summary.Row>
           </Table.Summary>
         )}
