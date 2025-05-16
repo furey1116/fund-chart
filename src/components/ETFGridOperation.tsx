@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Table, InputNumber, Button, Space, Alert, Tabs, Typography, Switch, Select } from 'antd';
+import { Card, Table, InputNumber, Button, Space, Alert, Tabs, Typography, Switch, Select, Radio } from 'antd';
 import type { TabsProps } from 'antd';
 import ReactECharts from 'echarts-for-react';
 import { FundHistoryNetValue } from '@/api/fund';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
+
+// 网格模式类型定义
+type GridModeType = 'percentage' | 'absolute';
 
 interface ETFGridOperationProps {
   fundCode: string;
@@ -65,6 +68,8 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
   const [initialPrice, setInitialPrice] = useState<number>(0);
   const [gridCount, setGridCount] = useState<number>(5);
   const [gridWidth, setGridWidth] = useState<number>(5);
+  const [gridMode, setGridMode] = useState<GridModeType>('percentage'); // 网格模式：百分比或绝对值
+  const [absoluteGridWidth, setAbsoluteGridWidth] = useState<number>(0.025); // 绝对宽度模式下的网格宽度
   const [investmentPerGrid, setInvestmentPerGrid] = useState<number>(1000);
   const [strategyType, setStrategyType] = useState<string>('symmetric');
   const [gridStrategy, setGridStrategy] = useState<GridStrategy | null>(null);
@@ -84,6 +89,11 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       // 默认使用最近的净值作为初始价格
       const latestNetValue = parseFloat(netValueData[0].DWJZ);
       setInitialPrice(Number(latestNetValue.toFixed(4)));
+      
+      // 初始化默认的绝对网格宽度（约为价格的2.5%）
+      if (latestNetValue > 0) {
+        setAbsoluteGridWidth(Number((latestNetValue * 0.025).toFixed(4)));
+      }
     }
   }, [netValueData]);
 
@@ -105,12 +115,32 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       // 对称网格策略
       // 小网格
       for (let i = -gridCount; i <= gridCount; i++) {
-        const percentage = i * gridWidth;
+        let price: number;
+        let percentage: number;
         
-        // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
-        if (percentage < minGearPercentage) continue;
+        if (gridMode === 'percentage') {
+          // 百分比模式
+          percentage = i * gridWidth;
+          
+          // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+          if (percentage < minGearPercentage) continue;
+          
+          price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
+        } else {
+          // 绝对值模式
+          const absoluteChange = i * absoluteGridWidth;
+          price = Number((initialPrice + absoluteChange).toFixed(4));
+          
+          // 计算对应的百分比变化
+          percentage = ((price / initialPrice) - 1) * 100;
+          
+          // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+          if (percentage < minGearPercentage) continue;
+          
+          // 确保价格为正
+          if (price <= 0) continue;
+        }
         
-        const price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
         const operation = percentage < 0 ? '买入' : percentage > 0 ? '卖出' : '起始点';
         
         const point: GridPoint = {
@@ -130,7 +160,18 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           point.buyAmount = point.buyCount * price; 
         } else if (operation === '卖出' && i > 0) {
           // 卖出情况，计算留存利润
-          const buyPrice = initialPrice * (1 - percentage / 100); // 对应买入价格
+          // 对应买入价格，根据网格模式计算
+          let buyPrice: number;
+          
+          if (gridMode === 'percentage') {
+            buyPrice = initialPrice * (1 - percentage / 100);
+          } else {
+            // 在绝对模式下，买入价格是当前卖出价格减去两倍的网格宽度
+            buyPrice = price - (2 * absoluteGridWidth);
+            // 确保买入价格为正
+            if (buyPrice <= 0) buyPrice = price * 0.5; // 应急处理
+          }
+          
           point.buyAmount = investmentPerGrid;
           point.buyCount = Math.floor(point.buyAmount / buyPrice / 100) * 100;
           point.buyAmount = point.buyCount * buyPrice;
@@ -159,12 +200,32 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           // 跳过0点，因为起始点已经在小网格中添加
           if (i === 0) continue;
           
-          const percentage = i * gridWidth * mediumGridMultiplier;
+          let price: number;
+          let percentage: number;
           
-          // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
-          if (percentage < minGearPercentage) continue;
+          if (gridMode === 'percentage') {
+            // 百分比模式
+            percentage = i * gridWidth * mediumGridMultiplier;
+            
+            // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+            if (percentage < minGearPercentage) continue;
+            
+            price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
+          } else {
+            // 绝对值模式
+            const absoluteChange = i * absoluteGridWidth * mediumGridMultiplier;
+            price = Number((initialPrice + absoluteChange).toFixed(4));
+            
+            // 计算对应的百分比变化
+            percentage = ((price / initialPrice) - 1) * 100;
+            
+            // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+            if (percentage < minGearPercentage) continue;
+            
+            // 确保价格为正
+            if (price <= 0) continue;
+          }
           
-          const price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
           const operation = percentage < 0 ? '买入' : '卖出';
           
           const point: GridPoint = {
@@ -180,7 +241,18 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
             point.buyCount = Math.floor(point.buyAmount / price / 100) * 100;
             point.buyAmount = point.buyCount * price;
           } else if (operation === '卖出') {
-            const buyPrice = initialPrice * (1 - percentage / 100);
+            // 对应买入价格，根据网格模式计算
+            let buyPrice: number;
+            
+            if (gridMode === 'percentage') {
+              buyPrice = initialPrice * (1 - percentage / 100);
+            } else {
+              // 在绝对模式下，买入价格是当前卖出价格减去两倍的网格宽度
+              buyPrice = price - (2 * absoluteGridWidth * mediumGridMultiplier);
+              // 确保买入价格为正
+              if (buyPrice <= 0) buyPrice = price * 0.5; // 应急处理
+            }
+            
             point.buyAmount = investmentPerGrid * mediumGridMultiplier;
             point.buyCount = Math.floor(point.buyAmount / buyPrice / 100) * 100;
             point.buyAmount = point.buyCount * buyPrice;
@@ -206,12 +278,32 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           // 跳过0点，因为起始点已经在小网格中添加
           if (i === 0) continue;
           
-          const percentage = i * gridWidth * largeGridMultiplier;
+          let price: number;
+          let percentage: number;
           
-          // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
-          if (percentage < minGearPercentage) continue;
+          if (gridMode === 'percentage') {
+            // 百分比模式
+            percentage = i * gridWidth * largeGridMultiplier;
+            
+            // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+            if (percentage < minGearPercentage) continue;
+            
+            price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
+          } else {
+            // 绝对值模式
+            const absoluteChange = i * absoluteGridWidth * largeGridMultiplier;
+            price = Number((initialPrice + absoluteChange).toFixed(4));
+            
+            // 计算对应的百分比变化
+            percentage = ((price / initialPrice) - 1) * 100;
+            
+            // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+            if (percentage < minGearPercentage) continue;
+            
+            // 确保价格为正
+            if (price <= 0) continue;
+          }
           
-          const price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
           const operation = percentage < 0 ? '买入' : '卖出';
           
           const point: GridPoint = {
@@ -227,7 +319,18 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
             point.buyCount = Math.floor(point.buyAmount / price / 100) * 100;
             point.buyAmount = point.buyCount * price;
           } else if (operation === '卖出') {
-            const buyPrice = initialPrice * (1 - percentage / 100);
+            // 对应买入价格，根据网格模式计算
+            let buyPrice: number;
+            
+            if (gridMode === 'percentage') {
+              buyPrice = initialPrice * (1 - percentage / 100);
+            } else {
+              // 在绝对模式下，买入价格是当前卖出价格减去两倍的网格宽度
+              buyPrice = price - (2 * absoluteGridWidth * largeGridMultiplier);
+              // 确保买入价格为正
+              if (buyPrice <= 0) buyPrice = price * 0.5; // 应急处理
+            }
+            
             point.buyAmount = investmentPerGrid * largeGridMultiplier;
             point.buyCount = Math.floor(point.buyAmount / buyPrice / 100) * 100;
             point.buyAmount = point.buyCount * buyPrice;
@@ -250,12 +353,32 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       // 单向下跌网格策略
       // 小网格
       for (let i = 0; i <= gridCount; i++) {
-        const percentage = -i * gridWidth;
+        let price: number;
+        let percentage: number;
         
-        // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
-        if (percentage < minGearPercentage) continue;
+        if (gridMode === 'percentage') {
+          // 百分比模式
+          percentage = -i * gridWidth;
+          
+          // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+          if (percentage < minGearPercentage) continue;
+          
+          price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
+        } else {
+          // 绝对值模式
+          const absoluteChange = -i * absoluteGridWidth;
+          price = Number((initialPrice + absoluteChange).toFixed(4));
+          
+          // 计算对应的百分比变化
+          percentage = ((price / initialPrice) - 1) * 100;
+          
+          // 如果启用了最大下跌幅度限制，并且下跌幅度超过限制，则跳过
+          if (percentage < minGearPercentage) continue;
+          
+          // 确保价格为正
+          if (price <= 0) continue;
+        }
         
-        const price = Number((initialPrice * (1 + percentage / 100)).toFixed(4));
         const operation = i === 0 ? '起始点' : '买入';
         
         const point: GridPoint = {
@@ -712,6 +835,21 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           </div>
           
           <div className="mb-4">
+            <label className="block text-sm font-medium mb-1">网格模式</label>
+            <Radio.Group
+              value={gridMode}
+              onChange={(e) => setGridMode(e.target.value)}
+              style={{ width: '100%' }}
+            >
+              <Radio.Button value="percentage">百分比模式</Radio.Button>
+              <Radio.Button value="absolute">绝对金额模式</Radio.Button>
+            </Radio.Group>
+            <span className="text-xs text-gray-500">
+              百分比模式：按价格变动百分比设置网格；绝对金额模式：按价格绝对变动值设置网格
+            </span>
+          </div>
+          
+          <div className="mb-4">
             <label className="block text-sm font-medium mb-1">参考价格</label>
             <InputNumber
               min={0.0001}
@@ -745,17 +883,33 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           </div>
           
           <div className="mb-4">
-            <label className="block text-sm font-medium mb-1">小网格宽度(%)</label>
-            <InputNumber
-              min={0.5}
-              max={20}
-              step={0.5}
-              value={gridWidth}
-              onChange={value => setGridWidth(value || 5)}
-              style={{ width: '100%' }}
-            />
+            <label className="block text-sm font-medium mb-1">
+              {gridMode === 'percentage' ? '小网格宽度(%)' : '小网格宽度(绝对值)'}
+            </label>
+            {gridMode === 'percentage' ? (
+              <InputNumber
+                min={0.5}
+                max={20}
+                step={0.5}
+                value={gridWidth}
+                onChange={value => setGridWidth(value || 5)}
+                style={{ width: '100%' }}
+              />
+            ) : (
+              <InputNumber
+                min={0.001}
+                max={1}
+                step={0.001}
+                precision={4}
+                value={absoluteGridWidth}
+                onChange={value => setAbsoluteGridWidth(value || 0.025)}
+                style={{ width: '100%' }}
+              />
+            )}
             <span className="text-xs text-gray-500">
-              相邻网格点之间的百分比间隔
+              {gridMode === 'percentage' 
+                ? '相邻网格点之间的百分比间隔' 
+                : '相邻网格点之间的绝对价格间隔'}
             </span>
           </div>
         </div>

@@ -10,6 +10,8 @@ import FundSearch from '@/components/FundSearch';
 import DateRangePicker, { DateRangeType } from '@/components/DateRangePicker';
 import FundTabsView from '@/components/FundTabsView';
 import FundDetail from '@/components/FundDetail';
+import FundOperationManager from '@/components/FundOperationManager';
+import FundOperationRecord from '@/components/FundOperationRecord';
 
 import {
   getFundHistoryNetValue,
@@ -26,6 +28,12 @@ const { Title } = Typography;
 
 // 设置 dayjs 语言为中文
 dayjs.locale('zh-cn');
+
+// 简化后的FundSearchResult类型，用于URL参数
+interface SimpleFundInfo {
+  CODE: string;
+  NAME: string;
+}
 
 export default function Home() {
   // 选中的基金
@@ -46,6 +54,8 @@ export default function Home() {
   const [netValueData, setNetValueData] = useState<FundHistoryNetValue[]>([]);
   const [fundDetail, setFundDetail] = useState<FundDetailType | null>(null);
   const [fundIncreases, setFundIncreases] = useState<FundIncrease[]>([]);
+  // 当前用户
+  const [currentUserId, setCurrentUserId] = useState<string>('');
 
   // 处理基金选择
   const handleFundSelect = (fund: FundSearchResult) => {
@@ -138,6 +148,53 @@ export default function Home() {
     }
   }, [selectedFund]);
 
+  // 检查URL参数
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const name = params.get('name');
+    
+    if (code && name) {
+      // 使用AI获取基金详情
+      const fetchFundByCode = async () => {
+        try {
+          // 先尝试使用简化后的FundSearchResult类型
+          const simpleFund: SimpleFundInfo = {
+            CODE: code,
+            NAME: decodeURIComponent(name)
+          };
+          
+          // 设置选中的基金
+          setSelectedFund(simpleFund as FundSearchResult);
+          
+          // 同时尝试获取完整的FundDetail
+          const detailResponse = await getFundDetail(code);
+          if (detailResponse && detailResponse.Datas) {
+            // 更新基金详情
+            setFundDetail(detailResponse.Datas);
+          }
+        } catch (error) {
+          console.error('获取基金详情失败:', error);
+        }
+      };
+      
+      fetchFundByCode();
+    }
+  }, []);
+  
+  // 检查本地存储是否有登录状态
+  useEffect(() => {
+    const storedUser = localStorage.getItem('current_user');
+    if (storedUser) {
+      try {
+        const userData = JSON.parse(storedUser);
+        setCurrentUserId(userData.id);
+      } catch (e) {
+        localStorage.removeItem('current_user');
+      }
+    }
+  }, []);
+
   return (
     <ConfigProvider locale={zhCN}>
       <Layout className="min-h-screen">
@@ -151,6 +208,8 @@ export default function Home() {
               <FundSearch onSelect={handleFundSelect} />
             </div>
 
+            <FundOperationManager />
+
             {selectedFund && (
               <>
                 <FundDetail 
@@ -158,6 +217,18 @@ export default function Home() {
                   fundIncreases={fundIncreases}
                   loading={loadingDetail} 
                 />
+
+                {currentUserId && netValueData.length > 0 && (
+                  <div className="bg-white p-6 rounded-lg shadow-sm mb-6">
+                    <Title level={4} className="mb-4">基金操作记录</Title>
+                    <FundOperationRecord
+                      fundCode={selectedFund.CODE}
+                      fundName={selectedFund.NAME}
+                      currentPrice={netValueData.length > 0 ? parseFloat(netValueData[0].DWJZ) : 0}
+                      userId={currentUserId}
+                    />
+                  </div>
+                )}
 
                 <div className="bg-white p-6 rounded-lg shadow-sm mb-6">
                   <div className="flex justify-between items-center mb-4">

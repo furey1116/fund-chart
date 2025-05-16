@@ -12,27 +12,29 @@ interface FundOperationRecordProps {
   fundCode: string;
   fundName: string;
   currentPrice: number;
+  userId: string;
 }
 
 const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
   fundCode,
   fundName,
   currentPrice,
+  userId,
 }) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [operations, setOperations] = useState<FundOperation[]>([]);
   const [holdingShares, setHoldingShares] = useState(0);
   const [marketValue, setMarketValue] = useState(0);
+  const [totalInvested, setTotalInvested] = useState(0);
+  const [totalFees, setTotalFees] = useState(0);
 
-  // 加载已有的操作记录
   const loadOperations = async () => {
     setLoading(true);
     try {
-      const data = await dbGetFundOperations(fundCode);
+      const data = await dbGetFundOperations(fundCode, userId);
       setOperations(data);
       
-      // 计算当前持有份额
       calculateHoldings(data);
     } catch (error) {
       console.error('加载操作记录失败:', error);
@@ -42,60 +44,64 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
     }
   };
 
-  // 计算持有份额和市值
   const calculateHoldings = (data: FundOperation[]) => {
     let totalShares = 0;
+    let invested = 0;
+    let fees = 0;
     
-    // 计算买入卖出后的持有份额
     data.forEach(op => {
       if (op.operationType === 'buy') {
         totalShares += op.shares;
+        invested += op.amount;
+        fees += op.fee;
       } else if (op.operationType === 'sell') {
         totalShares -= op.shares;
+        invested -= op.amount;
+        fees += op.fee;
       }
     });
     
     setHoldingShares(totalShares);
     setMarketValue(totalShares * currentPrice);
+    setTotalInvested(invested);
+    setTotalFees(fees);
   };
 
-  // 首次加载和基金代码更改时获取操作记录
   useEffect(() => {
-    if (fundCode) {
+    if (fundCode && userId) {
       loadOperations();
     }
-  }, [fundCode]);
+  }, [fundCode, userId]);
   
-  // 当前价格变化时更新市值
   useEffect(() => {
     setMarketValue(holdingShares * currentPrice);
   }, [currentPrice, holdingShares]);
 
-  // 表单提交
   const onFinish = async (values: any) => {
     setLoading(true);
     try {
-      // 计算金额
       const amount = values.price * values.shares;
+      const newHoldingShares = values.operationType === 'buy' 
+        ? holdingShares + values.shares 
+        : holdingShares - values.shares;
       
-      // 创建操作记录
-      const operation = createFundOperation(fundCode, fundName, {
-        operationType: values.operationType,
-        operationDate: values.operationDate.format('YYYY-MM-DD'),
-        price: values.price,
-        shares: values.shares,
-        amount,
-        fee: values.fee || 0,
-        holdingShares: values.operationType === 'buy' 
-          ? holdingShares + values.shares 
-          : holdingShares - values.shares,
-        marketValue: values.operationType === 'buy'
-          ? (holdingShares + values.shares) * currentPrice
-          : (holdingShares - values.shares) * currentPrice,
-        remark: values.remark
-      });
+      const operation = createFundOperation(
+        userId,
+        fundCode, 
+        fundName, 
+        {
+          operationType: values.operationType,
+          operationDate: values.operationDate.format('YYYY-MM-DD'),
+          price: values.price,
+          shares: values.shares,
+          amount,
+          fee: values.fee || 0,
+          holdingShares: newHoldingShares,
+          marketValue: newHoldingShares * currentPrice,
+          remark: values.remark
+        }
+      );
       
-      // 保存操作记录
       const success = await dbSaveFundOperation(operation);
       
       if (success) {
@@ -113,11 +119,10 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
     }
   };
   
-  // 删除操作记录
   const handleDelete = async (operationId: string) => {
     setLoading(true);
     try {
-      const success = await dbDeleteFundOperation(fundCode, operationId);
+      const success = await dbDeleteFundOperation(fundCode, operationId, userId);
       
       if (success) {
         message.success('操作记录已删除');
@@ -133,7 +138,29 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
     }
   };
 
-  // 表格列定义
+  const getEnhancedOperations = () => {
+    let runningShares = 0;
+    
+    const sortedOperations = [...operations].sort((a, b) => 
+      new Date(a.operationDate).getTime() - new Date(b.operationDate).getTime()
+    );
+    
+    return sortedOperations.map(op => {
+      if (op.operationType === 'buy') {
+        runningShares += op.shares;
+      } else {
+        runningShares -= op.shares;
+      }
+      
+      return {
+        ...op,
+        key: op.id,
+        holdingShares: runningShares,
+        marketValue: runningShares * currentPrice
+      };
+    });
+  };
+
   const columns: TableProps<FundOperation>['columns'] = [
     {
       title: '操作日期',
@@ -161,13 +188,19 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
       title: '份数',
       dataIndex: 'shares',
       key: 'shares',
-      render: (shares) => shares.toLocaleString(),
+      render: (shares, record) => 
+        <Text type={record.operationType === 'buy' ? 'success' : 'danger'}>
+          {record.operationType === 'buy' ? '+' : '-'}{shares.toLocaleString()}
+        </Text>,
     },
     {
       title: '金额',
       dataIndex: 'amount',
       key: 'amount',
-      render: (amount) => `¥${amount.toFixed(2)}`,
+      render: (amount, record) => 
+        <Text type={record.operationType === 'buy' ? 'success' : 'danger'}>
+          {record.operationType === 'buy' ? '+' : '-'}¥{amount.toFixed(2)}
+        </Text>,
     },
     {
       title: '手续费',
@@ -180,12 +213,14 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
       dataIndex: 'holdingShares',
       key: 'holdingShares',
       render: (shares) => shares ? shares.toLocaleString() : '-',
+      fixed: 'right',
     },
     {
       title: '市值',
       dataIndex: 'marketValue',
       key: 'marketValue',
       render: (value) => value ? `¥${value.toFixed(2)}` : '-',
+      fixed: 'right',
     },
     {
       title: '备注',
@@ -207,25 +242,26 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
           <Button type="link" danger>删除</Button>
         </Popconfirm>
       ),
+      fixed: 'right',
     },
   ];
 
-  // 自定义数字格式化函数
   const formatNumber = (value: number | undefined) => {
     if (value === undefined) return '';
     return `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   };
 
-  // 自定义数字解析函数
   const parseNumber = (value: string | undefined) => {
     if (!value) return 0;
     return Number(value.replace(/\$\s?|(,*)/g, ''));
   };
 
+  const enhancedOperations = getEnhancedOperations();
+
   return (
     <div className="space-y-4">
       <Card title="持仓摘要" size="small">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div>
             <Text type="secondary">持有份额:</Text>
             <Text strong className="ml-2">{holdingShares.toLocaleString()}</Text>
@@ -233,6 +269,14 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
           <div>
             <Text type="secondary">当前市值:</Text>
             <Text strong className="ml-2">¥{marketValue.toFixed(2)}</Text>
+          </div>
+          <div>
+            <Text type="secondary">总投入:</Text>
+            <Text strong className="ml-2">¥{totalInvested.toFixed(2)}</Text>
+          </div>
+          <div>
+            <Text type="secondary">总手续费:</Text>
+            <Text strong className="ml-2">¥{totalFees.toFixed(2)}</Text>
           </div>
         </div>
       </Card>
@@ -329,7 +373,7 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
       
       <Table
         columns={columns}
-        dataSource={operations.map(op => ({ ...op, key: op.id }))}
+        dataSource={enhancedOperations}
         loading={loading}
         pagination={{ pageSize: 10 }}
         size="small"
@@ -343,11 +387,19 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
               <Table.Summary.Cell index={3}>
                 <Text strong>{holdingShares.toLocaleString()}</Text>
               </Table.Summary.Cell>
-              <Table.Summary.Cell index={4} colSpan={4}></Table.Summary.Cell>
-              <Table.Summary.Cell index={8}>
+              <Table.Summary.Cell index={4}>
+                <Text strong>¥{totalInvested.toFixed(2)}</Text>
+              </Table.Summary.Cell>
+              <Table.Summary.Cell index={5}>
+                <Text strong>¥{totalFees.toFixed(2)}</Text>
+              </Table.Summary.Cell>
+              <Table.Summary.Cell index={6}>
+                <Text strong>{holdingShares.toLocaleString()}</Text>
+              </Table.Summary.Cell>
+              <Table.Summary.Cell index={7}>
                 <Text strong>¥{marketValue.toFixed(2)}</Text>
               </Table.Summary.Cell>
-              <Table.Summary.Cell index={9}></Table.Summary.Cell>
+              <Table.Summary.Cell index={8} colSpan={2}></Table.Summary.Cell>
             </Table.Summary.Row>
           </Table.Summary>
         )}

@@ -3,6 +3,7 @@
  */
 export interface FundOperation {
   id: string;               // 操作ID
+  userId: string;           // 用户ID
   fundCode: string;         // 基金代码
   fundName: string;         // 基金名称
   operationType: 'buy' | 'sell';  // 操作类型：买入/卖出
@@ -21,12 +22,14 @@ export interface FundOperation {
  * 创建基金操作记录
  */
 export function createFundOperation(
+  userId: string,
   fundCode: string,
   fundName: string,
-  data: Omit<FundOperation, 'id' | 'fundCode' | 'fundName' | 'createdAt'>
+  data: Omit<FundOperation, 'id' | 'userId' | 'fundCode' | 'fundName' | 'createdAt'>
 ): FundOperation {
   return {
     id: generateId(),
+    userId,
     fundCode,
     fundName,
     ...data,

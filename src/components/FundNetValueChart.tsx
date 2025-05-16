@@ -28,10 +28,19 @@ const FundNetValueChart: React.FC<FundNetValueChartProps> = ({
 
       // 提取日期和净值数据
       const dates = sortedData.map((item) => item.FSRQ);
-      const netValues = sortedData.map((item) => parseFloat(item.DWJZ));
+      const netValues = sortedData.map((item) => parseFloat(parseFloat(item.DWJZ).toFixed(4)));
       const percentChanges = sortedData.map((item) => 
         item.JZZZL ? parseFloat(item.JZZZL) : null
       );
+
+      // 计算净值数据的最大值和最小值，用于设置y轴范围
+      const minValue = Math.min(...netValues);
+      const maxValue = Math.max(...netValues);
+      
+      // 计算y轴边距，以显示更多细节（增加10%的上下边距）
+      const yAxisPadding = (maxValue - minValue) * 0.1;
+      const yAxisMin = Math.max(0, minValue - yAxisPadding); // 确保最小值不小于0
+      const yAxisMax = maxValue + yAxisPadding;
 
       // 构建图表选项
       const chartOption = {
@@ -72,6 +81,8 @@ const FundNetValueChart: React.FC<FundNetValueChartProps> = ({
         yAxis: {
           type: 'value',
           name: '单位净值',
+          min: yAxisMin,
+          max: yAxisMax,
           splitLine: {
             show: true,
             lineStyle: {
@@ -79,7 +90,9 @@ const FundNetValueChart: React.FC<FundNetValueChartProps> = ({
             },
           },
           axisLabel: {
-            formatter: '{value}',
+            formatter: function(value: number) {
+              return value.toFixed(4);
+            }
           },
         },
         dataZoom: [
@@ -115,6 +128,11 @@ const FundNetValueChart: React.FC<FundNetValueChartProps> = ({
                 { type: 'max', name: '最高值' },
                 { type: 'min', name: '最低值' },
               ],
+              label: {
+                formatter: function(params: any) {
+                  return params.value.toFixed(4);
+                }
+              }
             },
           },
         ],

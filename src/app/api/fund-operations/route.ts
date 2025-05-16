@@ -5,9 +5,10 @@ import { FundOperation } from '@/types/fundOperation';
 // 获取基金操作记录
 export async function GET(request: NextRequest) {
   try {
-    // 从URL获取基金代码
+    // 从URL获取基金代码和用户ID
     const searchParams = request.nextUrl.searchParams;
     const fundCode = searchParams.get('fundCode');
+    const userId = searchParams.get('userId');
     
     if (!fundCode) {
       return NextResponse.json({ error: '缺少基金代码' }, { status: 400 });
@@ -34,7 +35,12 @@ export async function GET(request: NextRequest) {
     }
     
     const text = await response.text();
-    const operations = JSON.parse(text) as FundOperation[];
+    let operations = JSON.parse(text) as FundOperation[];
+    
+    // 过滤掉要删除的操作
+    if (userId) {
+      operations = operations.filter(op => op.userId === userId);
+    }
     
     return NextResponse.json(operations, { status: 200 });
   } catch (error) {
@@ -49,7 +55,7 @@ export async function POST(request: NextRequest) {
     // 获取请求体
     const operation = await request.json() as FundOperation;
     
-    if (!operation || !operation.fundCode) {
+    if (!operation || !operation.fundCode || !operation.userId) {
       return NextResponse.json({ error: '无效的操作数据' }, { status: 400 });
     }
     
@@ -97,6 +103,7 @@ export async function DELETE(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const fundCode = searchParams.get('fundCode');
     const operationId = searchParams.get('operationId');
+    const userId = searchParams.get('userId');
     
     if (!fundCode || !operationId) {
       return NextResponse.json({
@@ -132,7 +139,13 @@ export async function DELETE(request: NextRequest) {
     const operations = JSON.parse(text) as FundOperation[];
     
     // 过滤掉要删除的操作
-    const filteredOperations = operations.filter(op => op.id !== operationId);
+    const filteredOperations = operations.filter(op => {
+      if (op.id === operationId) {
+        // 如果提供了用户ID，则过滤掉不属于该用户的操作
+        return userId ? op.userId !== userId : false;
+      }
+      return true;
+    });
     
     // 如果没有找到要删除的记录
     if (filteredOperations.length === operations.length) {
