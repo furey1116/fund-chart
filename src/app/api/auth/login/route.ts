@@ -19,21 +19,35 @@ export async function POST(request: NextRequest) {
       prefix: 'users/',
     });
     
-    const userListBlob = blobs.find(blob => blob.pathname.includes('user-list'));
-    if (!userListBlob) {
+    // 获取所有用户列表文件
+    const userListBlobs = blobs.filter(blob => blob.pathname.includes('user-list'));
+    if (userListBlobs.length === 0) {
       return NextResponse.json({ error: '用户不存在' }, { status: 401 });
     }
     
-    const userListPath = userListBlob.pathname;
+    // 固定的用户列表路径
+    const userListPath = 'users/user-list-main.json';
     
-    // 获取用户列表
-    const response = await fetch(userListBlob.url);
-    if (!response.ok) {
-      return NextResponse.json({ error: '无法获取用户列表' }, { status: 500 });
+    // 合并所有用户列表中的用户
+    let allUsers: User[] = [];
+    
+    for (const blob of userListBlobs) {
+      try {
+        const response = await fetch(blob.url);
+        if (response.ok) {
+          const text = await response.text();
+          const users = JSON.parse(text) as User[];
+          allUsers.push(...users);
+        }
+      } catch (error) {
+        console.error(`读取用户列表文件 ${blob.pathname} 失败:`, error);
+      }
     }
     
-    const text = await response.text();
-    const users = JSON.parse(text) as User[];
+    // 去重用户列表
+    const users = Array.from(
+      new Map(allUsers.map(user => [user.id, user])).values()
+    );
     
     // 查找用户
     const user = users.find(u => u.username === credentials.username);

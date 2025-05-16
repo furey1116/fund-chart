@@ -21,25 +21,42 @@ export async function POST(request: NextRequest) {
     
     // 检查用户名是否已存在
     let existingUsers: User[] = [];
-    let userListPath = 'users/user-list.json';
+    const userListPath = 'users/user-list-main.json';
     
     if (blobs.length > 0) {
-      // 获取用户列表文件
-      const userListBlob = blobs.find(blob => blob.pathname.includes('user-list'));
+      // 获取所有用户列表文件
+      const userListBlobs = blobs.filter(blob => blob.pathname.includes('user-list'));
       
-      if (userListBlob) {
-        userListPath = userListBlob.pathname;
-        const response = await fetch(userListBlob.url);
-        if (response.ok) {
-          const text = await response.text();
-          existingUsers = JSON.parse(text) as User[];
-          
-          // 检查用户名是否已存在
-          const userExists = existingUsers.some(user => user.username === userData.username);
-          if (userExists) {
-            return NextResponse.json({ error: '用户名已存在' }, { status: 400 });
+      // 合并所有用户列表中的用户
+      if (userListBlobs.length > 0) {
+        // 获取所有用户列表中的用户
+        const allUsers: User[] = [];
+        
+        for (const blob of userListBlobs) {
+          try {
+            const response = await fetch(blob.url);
+            if (response.ok) {
+              const text = await response.text();
+              const users = JSON.parse(text) as User[];
+              allUsers.push(...users);
+            }
+          } catch (error) {
+            console.error(`读取用户列表文件 ${blob.pathname} 失败:`, error);
           }
         }
+        
+        // 去重用户列表
+        const uniqueUsers = Array.from(
+          new Map(allUsers.map(user => [user.id, user])).values()
+        );
+        
+        existingUsers = uniqueUsers;
+      }
+      
+      // 检查用户名是否已存在
+      const userExists = existingUsers.some(user => user.username === userData.username);
+      if (userExists) {
+        return NextResponse.json({ error: '用户名已存在' }, { status: 400 });
       }
     }
     
