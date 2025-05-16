@@ -21,12 +21,14 @@ export async function POST(request: NextRequest) {
     
     // 检查用户名是否已存在
     let existingUsers: User[] = [];
+    let userListPath = 'users/user-list.json';
     
     if (blobs.length > 0) {
       // 获取用户列表文件
-      const userListBlob = blobs.find(blob => blob.pathname.endsWith('user-list.json'));
+      const userListBlob = blobs.find(blob => blob.pathname.includes('user-list'));
       
       if (userListBlob) {
+        userListPath = userListBlob.pathname;
         const response = await fetch(userListBlob.url);
         if (response.ok) {
           const text = await response.text();
@@ -57,7 +59,7 @@ export async function POST(request: NextRequest) {
     existingUsers.push(newUser);
     
     // 保存用户列表
-    await vercelBlob.put('users/user-list.json', JSON.stringify(existingUsers), {
+    await vercelBlob.put(userListPath, JSON.stringify(existingUsers), {
       access: 'public',
     });
     

@@ -19,10 +19,12 @@ export async function POST(request: NextRequest) {
       prefix: 'users/',
     });
     
-    const userListBlob = blobs.find(blob => blob.pathname.endsWith('user-list.json'));
+    const userListBlob = blobs.find(blob => blob.pathname.includes('user-list'));
     if (!userListBlob) {
       return NextResponse.json({ error: '用户不存在' }, { status: 401 });
     }
+    
+    const userListPath = userListBlob.pathname;
     
     // 获取用户列表
     const response = await fetch(userListBlob.url);
@@ -50,7 +52,7 @@ export async function POST(request: NextRequest) {
     
     // 更新用户列表
     const updatedUsers = users.map(u => u.id === user.id ? updatedUser : u);
-    await vercelBlob.put('users/user-list.json', JSON.stringify(updatedUsers), {
+    await vercelBlob.put(userListPath, JSON.stringify(updatedUsers), {
       access: 'public',
     });
     

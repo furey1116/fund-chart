@@ -32,14 +32,14 @@ export async function GET(request: NextRequest) {
       }
     }
     
-    // u5982u679cu6ca1u6709u76f4u63a5u7684u7528u6237u6587u4ef6uff0cu5c1du8bd5u4eceu7528u6237u5217u8868u4e2du67e5u627e
+    // 如果没有直接的用户文件，尝试从用户列表中查找
     const userListResponse = await vercelBlob.list({
       prefix: 'users/',
     });
     
-    const userListBlob = userListResponse.blobs.find(blob => blob.pathname.endsWith('user-list.json'));
+    const userListBlob = userListResponse.blobs.find(blob => blob.pathname.includes('user-list'));
     if (!userListBlob) {
-      return NextResponse.json({ error: 'u672au627eu5230u7528u6237' }, { status: 404 });
+      return NextResponse.json({ error: '未找到用户' }, { status: 404 });
     }
     
     // u83b7u53d6u7528u6237u5217u8868
