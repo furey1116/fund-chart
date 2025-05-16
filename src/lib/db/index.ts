@@ -1,1 +1,25 @@
-import { FundOperation } from '@/types/fundOperation';import { ApiRouteDriver } from './api-route-driver';import { LocalStorageDriver } from './local-storage-driver';import { DatabaseDriver, migrateDatabase } from './database-driver';// 获取数据库驱动实例function getDriver(): DatabaseDriver {  // 检查是否在浏览器环境中运行  if (typeof window === 'undefined') {    // 服务器端不能使用localStorage，返回API路由驱动    return new ApiRouteDriver();  }    // 检查是否在Vercel环境或者生产环境  const isVercelOrProduction =     process.env.NEXT_PUBLIC_VERCEL_ENV ||     process.env.VERCEL_ENV ||     process.env.NODE_ENV === 'production';    // 如果是Vercel或生产环境，使用API路由驱动  if (isVercelOrProduction) {    return new ApiRouteDriver();  }    // 本地开发环境使用localStorage  return new LocalStorageDriver();}// 导出统一的数据库接口函数export async function saveFundOperation(operation: FundOperation): Promise<boolean> {  return await getDriver().saveFundOperation(operation);}export async function getFundOperations(fundCode: string): Promise<FundOperation[]> {  return await getDriver().getFundOperations(fundCode);}export async function deleteFundOperation(fundCode: string, operationId: string): Promise<boolean> {  return await getDriver().deleteFundOperation(fundCode, operationId);}// 导出类型和实用工具export type { DatabaseDriver };export { migrateDatabase };export { ApiRouteDriver, LocalStorageDriver }; 
+import { FundOperation } from '@/types/fundOperation';
+import { DatabaseDriver, getDatabaseDriver, migrateDatabase } from './database-driver';
+import { ApiRouteDriver } from './api-route-driver';
+import { LocalStorageDriver } from './local-storage-driver';
+
+// 导出统一的数据库接口函数
+export async function saveFundOperation(operation: FundOperation): Promise<boolean> {
+  const driver = getDatabaseDriver();
+  return await driver.saveFundOperation(operation);
+}
+
+export async function getFundOperations(fundCode: string): Promise<FundOperation[]> {
+  const driver = getDatabaseDriver();
+  return await driver.getFundOperations(fundCode);
+}
+
+export async function deleteFundOperation(fundCode: string, operationId: string): Promise<boolean> {
+  const driver = getDatabaseDriver();
+  return await driver.deleteFundOperation(fundCode, operationId);
+}
+
+// 导出接口、类型、工具函数和驱动类
+export type { DatabaseDriver };
+export { getDatabaseDriver, migrateDatabase };
+export { ApiRouteDriver, LocalStorageDriver }; 
