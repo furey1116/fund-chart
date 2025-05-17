@@ -5,82 +5,11 @@ import type { TableProps } from 'antd';
 import { FundOperation } from '@/types/fundOperation';
 import { User } from '@/types/user';
 import { getAllFundOperations, deleteFundOperation } from '@/lib/db';
+import { getFundPrices } from '@/lib/api';
 import LoginForm from './LoginForm';
 import RegisterForm from './RegisterForm';
-import { getFundDetail } from '@/api/fund'; // 修正导入路径
 
 const { Title, Text } = Typography;
-
-// 用于获取最新净值的函数
-const getCurrentPrices = async (fundCodes: string[]): Promise<Record<string, number>> => {
-  const result: Record<string, number> = {};
-  
-  try {
-    console.log('获取基金净值，基金代码:', fundCodes);
-    
-    // 为每个基金代码调用API获取当前价格
-    const responses = await Promise.all(
-      fundCodes.map(code => 
-        getFundDetail(code)
-          .then(res => ({ code, response: res }))
-          .catch(err => {
-            console.error(`获取基金 ${code} 的详情失败:`, err);
-            return { code, response: null };
-          })
-      )
-    );
-    
-    // 处理 API 返回结果
-    responses.forEach(({ code, response }) => {
-      console.log(`基金 ${code} 的 API 响应:`, response);
-      
-      let netWorth = 1.0000; // 默认值
-      
-      // 尝试从不同的可能的字段中读取净值
-      if (response) {
-        if (typeof response.netWorth === 'number') {
-          netWorth = response.netWorth;
-        } else if (typeof response.DWJZ === 'string' && !isNaN(parseFloat(response.DWJZ))) {
-          // 如果 DWJZ 字段存在且是一个有效的数字字符串
-          netWorth = parseFloat(response.DWJZ);
-        } else if (response.Datas && response.Datas.DWJZ && !isNaN(parseFloat(response.Datas.DWJZ))) {
-          // 如果嵌套在 Datas 中
-          netWorth = parseFloat(response.Datas.DWJZ);
-        } else if (code === '588000') {
-          // 特殊处理华夏上证科创板50成份ETF
-          netWorth = 1.0505;
-        } else if (code === '588110') {
-          // 特殊处理广发上证科创板成长ETF
-          netWorth = 1.1471; // 根据操作记录历史中的市值计算: 4588.40 / 4000 = 1.1471
-        }
-      }
-      
-      // 保存净值
-      result[code] = netWorth;
-      console.log(`基金 ${code} 的最新净值: ${netWorth}`);
-    });
-    
-    console.log('所有基金的净值:', result);
-  } catch (e) {
-    console.error('获取净值失败:', e);
-    // 确保所有基金代码都有默认值
-    fundCodes.forEach(code => {
-      if (!result[code]) {
-        // 根据示例数据中的基金代码特殊处理
-        if (code === '588000') {
-          result[code] = 1.0505; // 华夏上证科创板50成份ETF
-        } else if (code === '588110') {
-          result[code] = 1.1471; // 广发上证科创板成长ETF
-        } else {
-          result[code] = 1.0000; // 其他基金默认值
-        }
-        console.log(`基金 ${code} 设置净值: ${result[code]}`);
-      }
-    });
-  }
-  
-  return result;
-};
 
 // 计算持有情况的函数
 const calculateHoldings = (operations: FundOperation[]): {
@@ -125,6 +54,7 @@ const FundOperationManager: React.FC = () => {
   const [showLoginForm, setShowLoginForm] = useState(false);
   const [showRegisterForm, setShowRegisterForm] = useState(false);
   const [currentPrices, setCurrentPrices] = useState<Record<string, number>>({});
+  const [refreshing, setRefreshing] = useState(false);
   
   // 持有情况计算
   const holdings = useMemo(() => calculateHoldings(operations), [operations]);
@@ -132,23 +62,33 @@ const FundOperationManager: React.FC = () => {
   
   // 计算总市值
   const totalMarketValue = useMemo(() => {
-    console.log('计算总市值，持仓信息:', holdingsByFund);
-    console.log('使用的价格数据:', currentPrices);
-    
     let sum = 0;
     Object.entries(holdingsByFund).forEach(([fundCode, shares]) => {
-      // 只计算持有份额大于0的基金
-      if (shares > 0) {
+      if (shares > 0) { // 只计算持有份额大于0的基金
         const price = currentPrices[fundCode] || 1.0000;
-        const value = shares * price;
-        console.log(`基金 ${fundCode} 持有 ${shares} 份，净值 ${price}，市值 ${value}`);
-        sum += value;
+        sum += shares * price;
       }
     });
-    
-    console.log('总市值计算结果:', sum);
     return sum;
   }, [holdingsByFund, currentPrices]);
+  
+  // 刷新价格数据
+  const refreshPrices = useCallback(async () => {
+    if (!currentUser || operations.length === 0) return;
+    
+    setRefreshing(true);
+    try {
+      // 获取基金代码列表
+      const fundCodes = Array.from(new Set(operations.map(op => op.fundCode)));
+      // 获取当前价格
+      const prices = await getFundPrices(fundCodes);
+      setCurrentPrices(prices);
+    } catch (error) {
+      console.error('刷新价格数据失败:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [currentUser, operations]);
   
   // 加载用户的所有操作记录
   const loadOperations = useCallback(async () => {
@@ -161,10 +101,8 @@ const FundOperationManager: React.FC = () => {
       
       // 获取基金代码列表
       const fundCodes = Array.from(new Set(data.map(op => op.fundCode)));
-      
       // 获取当前价格
-      const prices = await getCurrentPrices(fundCodes);
-      console.log('获取到的所有基金价格:', prices);
+      const prices = await getFundPrices(fundCodes);
       setCurrentPrices(prices);
     } catch (error) {
       console.error('加载操作记录失败:', error);
@@ -180,8 +118,22 @@ const FundOperationManager: React.FC = () => {
       loadOperations();
     } else {
       setOperations([]);
+      setCurrentPrices({});
     }
   }, [currentUser, loadOperations]);
+  
+  // 设置定时刷新价格
+  useEffect(() => {
+    // 只在有用户登录且有操作记录的情况下启用定时刷新
+    if (currentUser && operations.length > 0) {
+      // 每5分钟刷新一次价格
+      const intervalId = setInterval(() => {
+        refreshPrices();
+      }, 5 * 60 * 1000);
+      
+      return () => clearInterval(intervalId);
+    }
+  }, [currentUser, operations, refreshPrices]);
   
   // 检查本地存储是否有登录状态
   useEffect(() => {
@@ -272,7 +224,7 @@ const FundOperationManager: React.FC = () => {
           ...op,
           key: op.id,
           currentHolding: fundHolding,
-          currentMarketValue: fundHolding * currentPrice  // 使用当前价格计算市值
+          currentMarketValue: fundHolding * currentPrice
         });
       });
     });
@@ -463,7 +415,16 @@ const FundOperationManager: React.FC = () => {
     
     return (
       <>
-        <Card title="持仓摘要" size="small" className="mb-4">
+        <Card title="持仓摘要" size="small" className="mb-4" extra={
+          <Button 
+            type="link" 
+            onClick={refreshPrices} 
+            loading={refreshing}
+            disabled={refreshing}
+          >
+            刷新价格
+          </Button>
+        }>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
               <Text type="secondary">持有基金:</Text>
