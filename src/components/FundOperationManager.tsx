@@ -5,11 +5,44 @@ import type { TableProps } from 'antd';
 import { FundOperation } from '@/types/fundOperation';
 import { User } from '@/types/user';
 import { getAllFundOperations, deleteFundOperation } from '@/lib/db';
-import { getFundPrices } from '@/lib/api';
 import LoginForm from './LoginForm';
 import RegisterForm from './RegisterForm';
+import { getFundHistoryNetValue } from '@/api/fund'; // 导入获取基金净值的API
 
 const { Title, Text } = Typography;
+
+// 使用真实API获取最新净值
+const getCurrentPrices = async (fundCodes: string[]): Promise<Record<string, number>> => {
+  const result: Record<string, number> = {};
+  
+  try {
+    // 为每个基金代码调用API获取历史净值数据
+    const requests = fundCodes.map(code => getFundHistoryNetValue(code, 1, 10)); // 只需要最新的几条数据
+    const responses = await Promise.all(requests);
+    
+    // 处理返回的数据
+    fundCodes.forEach((code, index) => {
+      const netValueData = responses[index].Datas;
+      // 如果有数据，取最新一天的净值
+      if (netValueData && netValueData.length > 0) {
+        result[code] = parseFloat(netValueData[0].DWJZ);
+      } else {
+        // 如果没有数据，使用默认值
+        result[code] = 1.0000;
+      }
+    });
+  } catch (e) {
+    console.error('获取净值失败:', e);
+    // 确保所有基金代码都有默认值
+    fundCodes.forEach(code => {
+      if (!result[code]) {
+        result[code] = 1.0000;
+      }
+    });
+  }
+  
+  return result;
+};
 
 // 计算持有情况的函数
 const calculateHoldings = (operations: FundOperation[]): {
@@ -54,7 +87,6 @@ const FundOperationManager: React.FC = () => {
   const [showLoginForm, setShowLoginForm] = useState(false);
   const [showRegisterForm, setShowRegisterForm] = useState(false);
   const [currentPrices, setCurrentPrices] = useState<Record<string, number>>({});
-  const [refreshing, setRefreshing] = useState(false);
   
   // 持有情况计算
   const holdings = useMemo(() => calculateHoldings(operations), [operations]);
@@ -64,31 +96,11 @@ const FundOperationManager: React.FC = () => {
   const totalMarketValue = useMemo(() => {
     let sum = 0;
     Object.entries(holdingsByFund).forEach(([fundCode, shares]) => {
-      if (shares > 0) { // 只计算持有份额大于0的基金
-        const price = currentPrices[fundCode] || 1.0000;
-        sum += shares * price;
-      }
+      const price = currentPrices[fundCode] || 1.0000;
+      sum += shares * price;
     });
     return sum;
   }, [holdingsByFund, currentPrices]);
-  
-  // 刷新价格数据
-  const refreshPrices = useCallback(async () => {
-    if (!currentUser || operations.length === 0) return;
-    
-    setRefreshing(true);
-    try {
-      // 获取基金代码列表
-      const fundCodes = Array.from(new Set(operations.map(op => op.fundCode)));
-      // 获取当前价格
-      const prices = await getFundPrices(fundCodes);
-      setCurrentPrices(prices);
-    } catch (error) {
-      console.error('刷新价格数据失败:', error);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [currentUser, operations]);
   
   // 加载用户的所有操作记录
   const loadOperations = useCallback(async () => {
@@ -102,7 +114,7 @@ const FundOperationManager: React.FC = () => {
       // 获取基金代码列表
       const fundCodes = Array.from(new Set(data.map(op => op.fundCode)));
       // 获取当前价格
-      const prices = await getFundPrices(fundCodes);
+      const prices = await getCurrentPrices(fundCodes);
       setCurrentPrices(prices);
     } catch (error) {
       console.error('加载操作记录失败:', error);
@@ -118,22 +130,8 @@ const FundOperationManager: React.FC = () => {
       loadOperations();
     } else {
       setOperations([]);
-      setCurrentPrices({});
     }
   }, [currentUser, loadOperations]);
-  
-  // 设置定时刷新价格
-  useEffect(() => {
-    // 只在有用户登录且有操作记录的情况下启用定时刷新
-    if (currentUser && operations.length > 0) {
-      // 每5分钟刷新一次价格
-      const intervalId = setInterval(() => {
-        refreshPrices();
-      }, 5 * 60 * 1000);
-      
-      return () => clearInterval(intervalId);
-    }
-  }, [currentUser, operations, refreshPrices]);
   
   // 检查本地存储是否有登录状态
   useEffect(() => {
@@ -224,7 +222,7 @@ const FundOperationManager: React.FC = () => {
           ...op,
           key: op.id,
           currentHolding: fundHolding,
-          currentMarketValue: fundHolding * currentPrice
+          currentMarketValue: fundHolding * currentPrice  // 使用当前价格计算市值
         });
       });
     });
@@ -415,16 +413,7 @@ const FundOperationManager: React.FC = () => {
     
     return (
       <>
-        <Card title="持仓摘要" size="small" className="mb-4" extra={
-          <Button 
-            type="link" 
-            onClick={refreshPrices} 
-            loading={refreshing}
-            disabled={refreshing}
-          >
-            刷新价格
-          </Button>
-        }>
+        <Card title="持仓摘要" size="small" className="mb-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
               <Text type="secondary">持有基金:</Text>

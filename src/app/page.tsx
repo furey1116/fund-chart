@@ -22,7 +22,6 @@ import {
   FundDetail as FundDetailType,
   FundIncrease
 } from '@/api/fund';
-import { getFundPrice } from '@/lib/api';
 
 const { Header, Content, Footer } = Layout;
 const { Title } = Typography;
@@ -55,7 +54,6 @@ export default function Home() {
   const [netValueData, setNetValueData] = useState<FundHistoryNetValue[]>([]);
   const [fundDetail, setFundDetail] = useState<FundDetailType | null>(null);
   const [fundIncreases, setFundIncreases] = useState<FundIncrease[]>([]);
-  const [currentPrice, setCurrentPrice] = useState<number>(0);
   // 当前用户
   const [currentUserId, setCurrentUserId] = useState<string>('');
 
@@ -197,26 +195,6 @@ export default function Home() {
     }
   }, []);
 
-  // 获取基金当前价格
-  useEffect(() => {
-    if (selectedFund) {
-      const fetchCurrentPrice = async () => {
-        try {
-          const price = await getFundPrice(selectedFund.CODE);
-          setCurrentPrice(price);
-        } catch (error) {
-          console.error('获取基金当前价格失败:', error);
-          // 如果获取实时价格失败，尝试使用历史净值
-          if (netValueData.length > 0) {
-            setCurrentPrice(parseFloat(netValueData[0].DWJZ));
-          }
-        }
-      };
-
-      fetchCurrentPrice();
-    }
-  }, [selectedFund, netValueData]);
-
   return (
     <ConfigProvider locale={zhCN}>
       <Layout className="min-h-screen">
@@ -246,7 +224,7 @@ export default function Home() {
                     <FundOperationRecord
                       fundCode={selectedFund.CODE}
                       fundName={selectedFund.NAME}
-                      currentPrice={currentPrice}
+                      currentPrice={netValueData.length > 0 ? parseFloat(netValueData[0].DWJZ) : 0}
                       userId={currentUserId}
                     />
                   </div>

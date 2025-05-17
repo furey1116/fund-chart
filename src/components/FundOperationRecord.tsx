@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {   Form,   Input,   Button,   DatePicker,   Select,   InputNumber,   Table,   message,   Card,   Typography,  Divider,  Popconfirm,  Space} from 'antd';
 import dayjs from 'dayjs';
 import type { TableProps } from 'antd';
 import { FundOperation, createFundOperation } from '@/types/fundOperation';
 import {   saveFundOperation as dbSaveFundOperation,   getFundOperations as dbGetFundOperations,  deleteFundOperation as dbDeleteFundOperation} from '@/lib/db';
-import { getFundPrice } from '@/lib/api';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -19,7 +18,7 @@ interface FundOperationRecordProps {
 const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
   fundCode,
   fundName,
-  currentPrice: initialPrice,
+  currentPrice,
   userId,
 }) => {
   const [form] = Form.useForm();
@@ -29,8 +28,6 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
   const [marketValue, setMarketValue] = useState(0);
   const [totalInvested, setTotalInvested] = useState(0);
   const [totalFees, setTotalFees] = useState(0);
-  const [currentPrice, setCurrentPrice] = useState(initialPrice);
-  const [refreshing, setRefreshing] = useState(false);
 
   const loadOperations = async () => {
     setLoading(true);
@@ -46,21 +43,6 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
       setLoading(false);
     }
   };
-
-  const refreshPrice = useCallback(async () => {
-    if (!fundCode) return;
-    
-    setRefreshing(true);
-    try {
-      const price = await getFundPrice(fundCode);
-      setCurrentPrice(price);
-      form.setFieldsValue({ price });
-    } catch (error) {
-      console.error('刷新价格失败:', error);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [fundCode, form]);
 
   const calculateHoldings = (data: FundOperation[]) => {
     let totalShares = 0;
@@ -88,25 +70,12 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
   useEffect(() => {
     if (fundCode && userId) {
       loadOperations();
-      refreshPrice();
     }
-  }, [fundCode, userId, refreshPrice]);
+  }, [fundCode, userId]);
   
   useEffect(() => {
     setMarketValue(holdingShares * currentPrice);
   }, [currentPrice, holdingShares]);
-
-  // 设置定时刷新价格
-  useEffect(() => {
-    if (fundCode) {
-      // 每5分钟刷新一次价格
-      const intervalId = setInterval(() => {
-        refreshPrice();
-      }, 5 * 60 * 1000);
-      
-      return () => clearInterval(intervalId);
-    }
-  }, [fundCode, refreshPrice]);
 
   const onFinish = async (values: any) => {
     setLoading(true);
@@ -291,16 +260,7 @@ const FundOperationRecord: React.FC<FundOperationRecordProps> = ({
 
   return (
     <div className="space-y-4">
-      <Card title="持仓摘要" size="small" extra={
-        <Button 
-          type="link" 
-          onClick={refreshPrice} 
-          loading={refreshing}
-          disabled={refreshing}
-        >
-          刷新价格
-        </Button>
-      }>
+      <Card title="持仓摘要" size="small">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div>
             <Text type="secondary">持有份额:</Text>
