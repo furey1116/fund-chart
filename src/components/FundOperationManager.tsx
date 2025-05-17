@@ -23,7 +23,7 @@ const getCurrentPrices = async (fundCodes: string[]): Promise<Record<string, num
     // 测试数据 - 不同的最新价格
     const latestPrices: Record<string, number> = {
       '588000': 1.0505, // 华夏上证科创50成份ETF最新价格
-      '588330': 0.5916, // 华宝双创龙头ETF最新价格
+      '588110': 1.1471, // 广发上证科创板成长ETF最新价格
       // 其他基金代码的最新价格...
     };
     
@@ -104,6 +104,7 @@ const FundOperationManager: React.FC = () => {
   const totalMarketValue = useMemo(() => {
     let sum = 0;
     Object.entries(holdingsByFund).forEach(([fundCode, shares]) => {
+      // 使用最新价格计算市值
       const price = currentPrices[fundCode] || 1.0000;
       sum += shares * price;
     });
