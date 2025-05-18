@@ -18,4 +18,29 @@ model User {
   email         String?
   createdAt     DateTime  @default(now())
   lastLoginAt   DateTime?
+  operations    FundOperation[]
+}
+
+model FundOperation {
+  id             String   @id @default(cuid())
+  userId         String
+  fundCode       String
+  fundName       String
+  operationType  String   // 'buy' or 'sell'
+  operationDate  DateTime
+  price          Float
+  shares         Float
+  amount         Float
+  fee            Float
+  holdingShares  Float?
+  marketValue    Float?
+  remark         String?
+  createdAt      DateTime @default(now())
+  
+  // 关联到用户
+  user           User     @relation(fields: [userId], references: [id])
+  
+  // 创建复合索引以便于查询
+  @@index([userId, fundCode])
+  @@index([fundCode])
 } 

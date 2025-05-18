@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import * as vercelBlob from '@vercel/blob';
 import { FundOperation } from '@/types/fundOperation';
+import { prisma } from '@/lib/prisma';
 
 // 获取基金操作记录
 export async function GET(request: NextRequest) {
@@ -14,35 +14,37 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '缺少基金代码' }, { status: 400 });
     }
     
-    // 查询Blob存储
-    const { blobs } = await vercelBlob.list({
-      prefix: `fundOperations/${fundCode}/`,
+    // 构建查询条件
+    const whereClause: any = { fundCode };
+    if (userId) {
+      whereClause.userId = userId;
+    }
+    
+    // 查询数据库
+    const operations = await prisma.fundOperation.findMany({
+      where: whereClause,
+      orderBy: { operationDate: 'desc' }
     });
     
-    if (blobs.length === 0) {
-      return NextResponse.json([], { status: 200 });
-    }
+    // 格式化结果
+    const formattedOperations = operations.map(op => ({
+      id: op.id,
+      userId: op.userId,
+      fundCode: op.fundCode,
+      fundName: op.fundName,
+      operationType: op.operationType,
+      operationDate: op.operationDate.toISOString().split('T')[0], // 转换为YYYY-MM-DD格式
+      price: op.price,
+      shares: op.shares,
+      amount: op.amount,
+      fee: op.fee,
+      holdingShares: op.holdingShares,
+      marketValue: op.marketValue,
+      remark: op.remark,
+      createdAt: op.createdAt.toISOString()
+    }));
     
-    // 获取最新的文件
-    const latestBlob = blobs.sort((a, b) => 
-      new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
-    )[0];
-    
-    // 获取文件内容
-    const response = await fetch(latestBlob.url);
-    if (!response.ok) {
-      return NextResponse.json([], { status: 200 });
-    }
-    
-    const text = await response.text();
-    let operations = JSON.parse(text) as FundOperation[];
-    
-    // 过滤掉要删除的操作
-    if (userId) {
-      operations = operations.filter(op => op.userId === userId);
-    }
-    
-    return NextResponse.json(operations, { status: 200 });
+    return NextResponse.json(formattedOperations, { status: 200 });
   } catch (error) {
     console.error('获取基金操作记录失败:', error);
     return NextResponse.json({ error: '获取基金操作记录失败' }, { status: 500 });
@@ -59,37 +61,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '无效的操作数据' }, { status: 400 });
     }
     
-    // 先获取现有数据
-    const { blobs } = await vercelBlob.list({
-      prefix: `fundOperations/${operation.fundCode}/`,
-    });
+    // 将操作日期字符串转换为Date对象
+    const operationDate = new Date(operation.operationDate);
     
-    let existingOperations: FundOperation[] = [];
-    
-    if (blobs.length > 0) {
-      // 获取最新的文件
-      const latestBlob = blobs.sort((a, b) => 
-        new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
-      )[0];
-      
-      // 获取文件内容
-      const response = await fetch(latestBlob.url);
-      if (response.ok) {
-        const text = await response.text();
-        existingOperations = JSON.parse(text) as FundOperation[];
+    // 保存到数据库
+    await prisma.fundOperation.create({
+      data: {
+        id: operation.id,
+        userId: operation.userId,
+        fundCode: operation.fundCode,
+        fundName: operation.fundName,
+        operationType: operation.operationType,
+        operationDate: operationDate,
+        price: operation.price,
+        shares: operation.shares,
+        amount: operation.amount,
+        fee: operation.fee,
+        holdingShares: operation.holdingShares,
+        marketValue: operation.marketValue,
+        remark: operation.remark
       }
-    }
-    
-    // 添加新操作
-    const updatedOperations = [...existingOperations, operation];
-    
-    // 保存到Blob存储
-    const fileName = `fundOperations/${operation.fundCode}/${Date.now()}.json`;
-    const result = await vercelBlob.put(fileName, JSON.stringify(updatedOperations), {
-      access: 'public',
     });
     
-    return NextResponse.json({ success: true, url: result.url }, { status: 200 });
+    return NextResponse.json({ success: true }, { status: 200 });
   } catch (error) {
     console.error('保存基金操作记录失败:', error);
     return NextResponse.json({ error: '保存基金操作记录失败' }, { status: 500 });
@@ -99,72 +93,32 @@ export async function POST(request: NextRequest) {
 // 删除基金操作记录
 export async function DELETE(request: NextRequest) {
   try {
-    // 从URL获取基金代码和操作ID
+    // 从URL获取参数
     const searchParams = request.nextUrl.searchParams;
     const fundCode = searchParams.get('fundCode');
     const operationId = searchParams.get('operationId');
     const userId = searchParams.get('userId');
     
-    if (!fundCode || !operationId) {
-      return NextResponse.json({
-        error: '缺少必要参数',
-        details: '需要提供fundCode和operationId'
-      }, { status: 400 });
+    if (!fundCode || !operationId || !userId) {
+      return NextResponse.json({ error: '缺少必要参数' }, { status: 400 });
     }
     
-    // 查询Blob存储
-    const { blobs } = await vercelBlob.list({
-      prefix: `fundOperations/${fundCode}/`,
-    });
-    
-    if (blobs.length === 0) {
-      return NextResponse.json({
-        error: '未找到记录',
-        details: '该基金没有操作记录'
-      }, { status: 404 });
-    }
-    
-    // 获取最新的文件
-    const latestBlob = blobs.sort((a, b) => 
-      new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
-    )[0];
-    
-    // 获取文件内容
-    const response = await fetch(latestBlob.url);
-    if (!response.ok) {
-      return NextResponse.json({ error: '读取记录失败' }, { status: 500 });
-    }
-    
-    const text = await response.text();
-    const operations = JSON.parse(text) as FundOperation[];
-    
-    // 过滤掉要删除的操作
-    const filteredOperations = operations.filter(op => {
-      if (op.id === operationId) {
-        // 如果提供了用户ID，则过滤掉不属于该用户的操作
-        return userId ? op.userId !== userId : false;
+    // 从数据库中删除记录
+    const result = await prisma.fundOperation.deleteMany({
+      where: {
+        id: operationId,
+        fundCode: fundCode,
+        userId: userId
       }
-      return true;
     });
     
-    // 如果没有找到要删除的记录
-    if (filteredOperations.length === operations.length) {
-      return NextResponse.json({
-        error: '未找到记录',
-        details: '未找到指定ID的操作记录'
-      }, { status: 404 });
+    if (result.count === 0) {
+      return NextResponse.json({ error: '未找到操作记录或无权删除' }, { status: 404 });
     }
-    
-    // 保存更新后的操作列表
-    const fileName = `fundOperations/${fundCode}/${Date.now()}.json`;
-    const result = await vercelBlob.put(fileName, JSON.stringify(filteredOperations), {
-      access: 'public',
-    });
     
     return NextResponse.json({
       success: true,
-      message: '已成功删除操作记录',
-      url: result.url
+      message: '已成功删除操作记录'
     }, { status: 200 });
   } catch (error) {
     console.error('删除基金操作记录失败:', error);

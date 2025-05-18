@@ -2,6 +2,7 @@ import { FundOperation } from '@/types/fundOperation';
 import { User, LoginRequest, RegisterRequest } from '@/types/user';
 import { ApiRouteDriver } from './api-route-driver';
 import { LocalStorageDriver } from './local-storage-driver';
+import { PrismaDriver } from './prisma-driver';
 
 // 数据库操作接口
 export interface DatabaseDriver {
@@ -14,6 +15,13 @@ export interface DatabaseDriver {
   getUserById(userId: string): Promise<User | null>;
   updateUserLastLogin(userId: string): Promise<boolean>;
   migrateData?(source: DatabaseDriver): Promise<boolean>;
+}
+
+// 获取数据库驱动实例
+export function getDatabaseDriver(): DatabaseDriver {
+  // 检查环境变量或其他配置以决定使用哪个驱动
+  // 这里我们默认使用Prisma驱动
+  return new PrismaDriver();
 }
 
 // 数据库迁移助手
@@ -51,35 +59,4 @@ export async function migrateDatabase(
       message: `迁移失败: ${error instanceof Error ? error.message : String(error)}`
     };
   }
-}
-
-// 工厂函数，根据环境返回适当的数据库驱动
-export function getDatabaseDriver(): DatabaseDriver {
-  // 检查是否在浏览器环境中运行
-  if (typeof window === 'undefined') {
-    // 服务器端不能使用localStorage，返回API路由驱动
-    return new ApiRouteDriver();
-  }
-  
-  // 检查是否在Vercel环境或者生产环境
-  const isVercelOrProduction = 
-    process.env.NEXT_PUBLIC_VERCEL_ENV || 
-    process.env.VERCEL_ENV || 
-    process.env.NODE_ENV === 'production';
-  
-  // 如果是Vercel或生产环境，使用API路由驱动
-  if (isVercelOrProduction) {
-    return new ApiRouteDriver();
-  }
-  
-  // 本地开发环境判断是否配置了自定义数据库
-  const useCustomDb = process.env.NEXT_PUBLIC_USE_CUSTOM_DB === 'true';
-  if (useCustomDb) {
-    // 如果将来实现了自定义数据库驱动，可以在这里返回
-    // return new CustomDatabaseDriver();
-    console.warn('自定义数据库驱动尚未实现，回退到localStorage');
-  }
-  
-  // 默认使用localStorage
-  return new LocalStorageDriver();
 } 
