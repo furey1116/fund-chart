@@ -1,8 +1,11 @@
 import { FundOperation } from '@/types/fundOperation';
-import { User, LoginRequest, RegisterRequest } from '@/types/user';
+import { User, UserWithPassword, LoginRequest, RegisterRequest } from '@/types/user';
 import { DatabaseDriver } from './database-driver';
 import { prisma } from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
+
+// 使用 as any 临时解决类型问题
+const prismaClient = prisma as any;
 
 // 使用Prisma的PostgreSQL数据库驱动
 export class PrismaDriver implements DatabaseDriver {
@@ -12,7 +15,7 @@ export class PrismaDriver implements DatabaseDriver {
       const operationDate = new Date(operation.operationDate);
       
       // 使用Prisma创建基金操作记录
-      await prisma.fundOperation.create({
+      await prismaClient.fundOperation.create({
         data: {
           id: operation.id,
           userId: operation.userId,
@@ -46,13 +49,13 @@ export class PrismaDriver implements DatabaseDriver {
       }
       
       // 使用Prisma查询基金操作记录
-      const operations = await prisma.fundOperation.findMany({
+      const operations = await prismaClient.fundOperation.findMany({
         where: whereClause,
         orderBy: { operationDate: 'desc' }
       });
       
       // 将Prisma模型转换为应用程序类型
-      return operations.map(op => ({
+      return operations.map((op: any) => ({
         id: op.id,
         userId: op.userId,
         fundCode: op.fundCode,
@@ -77,13 +80,13 @@ export class PrismaDriver implements DatabaseDriver {
   async getAllFundOperations(userId: string): Promise<FundOperation[]> {
     try {
       // 使用Prisma查询用户的所有基金操作记录
-      const operations = await prisma.fundOperation.findMany({
+      const operations = await prismaClient.fundOperation.findMany({
         where: { userId },
         orderBy: { operationDate: 'desc' }
       });
       
       // 将Prisma模型转换为应用程序类型
-      return operations.map(op => ({
+      return operations.map((op: any) => ({
         id: op.id,
         userId: op.userId,
         fundCode: op.fundCode,
@@ -108,7 +111,7 @@ export class PrismaDriver implements DatabaseDriver {
   async deleteFundOperation(fundCode: string, operationId: string, userId: string): Promise<boolean> {
     try {
       // 使用Prisma删除基金操作记录
-      const result = await prisma.fundOperation.deleteMany({
+      const result = await prismaClient.fundOperation.deleteMany({
         where: {
           id: operationId,
           fundCode: fundCode,
@@ -147,6 +150,7 @@ export class PrismaDriver implements DatabaseDriver {
         }
       });
       
+      // 返回安全的用户对象（不包含密码）
       return {
         id: newUser.id,
         username: newUser.username,
@@ -182,6 +186,7 @@ export class PrismaDriver implements DatabaseDriver {
       // 更新最后登录时间
       await this.updateUserLastLogin(user.id);
       
+      // 返回安全的用户对象（不包含密码）
       return {
         id: user.id,
         username: user.username,
@@ -207,6 +212,7 @@ export class PrismaDriver implements DatabaseDriver {
         return null; // 用户不存在
       }
       
+      // 返回安全的用户对象（不包含密码）
       return {
         id: user.id,
         username: user.username,

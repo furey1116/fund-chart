@@ -1,5 +1,5 @@
 import { FundOperation } from '@/types/fundOperation';
-import { User, LoginRequest, RegisterRequest } from '@/types/user';
+import { User, UserWithPassword, LoginRequest, RegisterRequest } from '@/types/user';
 import { ApiRouteDriver } from './api-route-driver';
 import { LocalStorageDriver } from './local-storage-driver';
 import { PrismaDriver } from './prisma-driver';

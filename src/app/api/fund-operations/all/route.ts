@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { FundOperation } from '@/types/fundOperation';
 import { prisma } from '@/lib/prisma';
 
+// 使用 as any 临时解决类型问题
+const prismaClient = prisma as any;
+
 // 获取用户的所有基金操作记录
 export async function GET(request: NextRequest) {
   try {
@@ -14,13 +17,13 @@ export async function GET(request: NextRequest) {
     }
     
     // 使用Prisma查询数据库
-    const operations = await prisma.fundOperation.findMany({
+    const operations = await prismaClient.fundOperation.findMany({
       where: { userId },
       orderBy: { operationDate: 'desc' }
     });
     
     // 格式化结果
-    const formattedOperations = operations.map(op => ({
+    const formattedOperations = operations.map((op: any) => ({
       id: op.id,
       userId: op.userId,
       fundCode: op.fundCode,

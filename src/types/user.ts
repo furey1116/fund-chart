@@ -1,7 +1,7 @@
 /**
- * 用户类型定义
+ * 用户类型定义（带密码，用于内部处理）
  */
-export interface User {
+export interface UserWithPassword {
   id: string;         // 用户ID
   username: string;   // 用户名
   password: string;   // 密码（存储时应加密）
@@ -10,6 +10,11 @@ export interface User {
   createdAt: string;  // 创建时间
   lastLoginAt?: string; // 最后登录时间
 }
+
+/**
+ * 安全的用户类型（不包含密码，用于前端显示和API返回）
+ */
+export type User = Omit<UserWithPassword, 'password'>;
 
 /**
  * 登录请求
@@ -30,19 +35,20 @@ export interface RegisterRequest {
 }
 
 /**
+ * 生成唯一ID
+ */
+function generateId(): string {
+  return Math.random().toString(36).substring(2, 15) + 
+         Math.random().toString(36).substring(2, 15);
+}
+
+/**
  * 创建用户
  */
-export function createUser(data: Omit<User, 'id' | 'createdAt'>): User {
+export function createUser(data: Omit<UserWithPassword, 'id' | 'createdAt'>): UserWithPassword {
   return {
     id: generateId(),
     ...data,
     createdAt: new Date().toISOString()
   };
-}
-
-/**
- * 生成唯一ID
- */
-function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
 } 
