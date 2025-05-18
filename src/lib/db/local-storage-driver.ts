@@ -1,5 +1,5 @@
 import { FundOperation } from '@/types/fundOperation';
-import { User, LoginRequest, RegisterRequest } from '@/types/user';
+import { User, UserWithPassword, LoginRequest, RegisterRequest } from '@/types/user';
 import { DatabaseDriver } from './database-driver';
 import { createUser } from '@/types/user';
 import bcrypt from 'bcryptjs';
@@ -155,7 +155,7 @@ export class LocalStorageDriver implements DatabaseDriver {
       
       // 返回用户信息，不包括密码
       const { password, ...userWithoutPassword } = newUser;
-      return userWithoutPassword as User;
+      return userWithoutPassword;
     } catch (error) {
       console.error('Failed to register user:', error);
       return null;
@@ -167,24 +167,24 @@ export class LocalStorageDriver implements DatabaseDriver {
       // 获取所有用户
       const users = this.getUsers();
       
-      // 查找用户
-      const user = users.find(user => user.username === credentials.username);
-      if (!user) {
+      // 查找用户 (带密码的完整用户对象)
+      const userWithPassword = users.find(user => user.username === credentials.username) as UserWithPassword;
+      if (!userWithPassword) {
         return null;
       }
       
       // 验证密码
-      const isPasswordValid = await bcrypt.compare(credentials.password, user.password);
+      const isPasswordValid = await bcrypt.compare(credentials.password, userWithPassword.password);
       if (!isPasswordValid) {
         return null;
       }
       
       // 更新最近一次登录时间
-      this.updateUserLastLogin(user.id);
+      this.updateUserLastLogin(userWithPassword.id);
       
       // 返回用户信息，不包括密码
-      const { password, ...userWithoutPassword } = user;
-      return userWithoutPassword as User;
+      const { password, ...userWithoutPassword } = userWithPassword;
+      return userWithoutPassword;
     } catch (error) {
       console.error('Failed to login user:', error);
       return null;
@@ -196,22 +196,22 @@ export class LocalStorageDriver implements DatabaseDriver {
       // 尝试从缓存中获取用户
       const cachedUser = localStorage.getItem(this.getUserByIdStorageKey(userId));
       if (cachedUser) {
-        const user = JSON.parse(cachedUser) as User;
-        const { password, ...userWithoutPassword } = user;
-        return userWithoutPassword as User;
+        const userWithPassword = JSON.parse(cachedUser) as UserWithPassword;
+        const { password, ...userWithoutPassword } = userWithPassword;
+        return userWithoutPassword;
       }
       
       // 如果缓存中没有，从用户列表中查找
       const users = this.getUsers();
-      const user = users.find(user => user.id === userId);
+      const userWithPassword = users.find(user => user.id === userId) as UserWithPassword;
       
-      if (!user) {
+      if (!userWithPassword) {
         return null;
       }
       
       // 返回用户信息，不包括密码
-      const { password, ...userWithoutPassword } = user;
-      return userWithoutPassword as User;
+      const { password, ...userWithoutPassword } = userWithPassword;
+      return userWithoutPassword;
     } catch (error) {
       console.error('Failed to get user by ID:', error);
       return null;
@@ -248,9 +248,9 @@ export class LocalStorageDriver implements DatabaseDriver {
     }
   }
   
-  private getUsers(): User[] {
+  private getUsers(): UserWithPassword[] {
     const data = localStorage.getItem(this.getUsersStorageKey());
     if (!data) return [];
-    return JSON.parse(data) as User[];
+    return JSON.parse(data) as UserWithPassword[];
   }
 } 

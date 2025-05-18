@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { RegisterRequest, User, createUser } from '@/types/user';
+import { RegisterRequest, User } from '@/types/user';
 import bcrypt from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
 
