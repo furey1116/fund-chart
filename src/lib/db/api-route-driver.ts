@@ -1,5 +1,5 @@
 import { FundOperation } from '@/types/fundOperation';
-import { User, LoginRequest, RegisterRequest } from '@/types/user';
+import { User, UserWithPassword, LoginRequest, RegisterRequest } from '@/types/user';
 import { DatabaseDriver } from './database-driver';
 
 // 使用API路由的Vercel Blob数据库驱动

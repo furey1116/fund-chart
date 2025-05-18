@@ -19,9 +19,16 @@ export interface DatabaseDriver {
 
 // 获取数据库驱动实例
 export function getDatabaseDriver(): DatabaseDriver {
-  // 检查环境变量或其他配置以决定使用哪个驱动
-  // 这里我们默认使用Prisma驱动
-  return new PrismaDriver();
+  // 检测是否在浏览器环境中
+  const isBrowser = typeof window !== 'undefined';
+  
+  if (isBrowser) {
+    // 在浏览器中使用API路由驱动
+    return new ApiRouteDriver();
+  } else {
+    // 在服务器端使用Prisma驱动
+    return new PrismaDriver();
+  }
 }
 
 // 数据库迁移助手

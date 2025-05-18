@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
-// 通过ID获取用户
-export async function GET(request: NextRequest) {
+// 更新用户最后登录时间
+export async function PUT(request: NextRequest) {
   try {
     // 获取用户ID
     const searchParams = request.nextUrl.searchParams;
@@ -21,11 +21,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '未找到用户' }, { status: 404 });
     }
     
-    // 返回用户信息，不含密码
-    const { password, ...userWithoutPassword } = user;
-    return NextResponse.json(userWithoutPassword, { status: 200 });
+    // 更新最后登录时间
+    await prisma.user.update({
+      where: { id: userId },
+      data: { lastLoginAt: new Date() }
+    });
+    
+    return NextResponse.json({ success: true }, { status: 200 });
   } catch (error) {
-    console.error('获取用户信息失败:', error);
-    return NextResponse.json({ error: '获取用户信息失败' }, { status: 500 });
+    console.error('更新最后登录时间失败:', error);
+    return NextResponse.json({ error: '更新最后登录时间失败' }, { status: 500 });
   }
 } 
