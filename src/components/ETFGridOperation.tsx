@@ -1270,6 +1270,21 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
   const getBacktestChartOption = () => {
     if (!backtestResults) return {};
 
+    // 计算净值的最大值和最小值
+    const netValues = backtestResults.netValues;
+    const minNetValue = Math.min(...netValues.filter(v => v > 0)); // 过滤掉0值
+    const maxNetValue = Math.max(...netValues);
+    
+    // 为了使图表更美观，给最大最小值添加一些边距
+    const netValueRange = maxNetValue - minNetValue;
+    const paddingRatio = 0.1; // 上下各增加10%的范围
+    const minYAxis = Math.max(0, minNetValue - (netValueRange * paddingRatio));
+    const maxYAxis = maxNetValue + (netValueRange * paddingRatio);
+    
+    // 为了图表更加易读，将min和max取整到更合适的值
+    const roundedMinYAxis = Math.floor(minYAxis * 100) / 100;
+    const roundedMaxYAxis = Math.ceil(maxYAxis * 100) / 100;
+    
     return {
       title: {
         text: '网格交易回测结果',
@@ -1304,10 +1319,17 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           type: 'value',
           name: '净值',
           position: 'left',
+          min: roundedMinYAxis,
+          max: roundedMaxYAxis,
           axisLine: {
             lineStyle: {
               color: '#5470C6',
             },
+          },
+          splitLine: {
+            lineStyle: {
+              type: 'dashed',
+            }
           },
         },
         {
@@ -1318,6 +1340,9 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
             lineStyle: {
               color: '#91CC75',
             },
+          },
+          splitLine: {
+            show: false
           },
         },
       ],
@@ -1340,6 +1365,12 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           data: backtestResults.netValues,
           yAxisIndex: 0,
           symbol: 'none',
+          lineStyle: {
+            width: 2
+          },
+          emphasis: {
+            focus: 'series'
+          },
         },
         {
           name: '累计投入',
