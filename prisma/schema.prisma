@@ -19,6 +19,7 @@ model User {
   createdAt     DateTime  @default(now())
   lastLoginAt   DateTime?
   operations    FundOperation[]
+  gridStrategies GridStrategy[]
 }
 
 model FundOperation {
@@ -43,4 +44,105 @@ model FundOperation {
   // 创建复合索引以便于查询
   @@index([userId, fundCode])
   @@index([fundCode])
+}
+
+// 存储基金/ETF的K线数据
+model FundKLineData {
+  id          String   @id @default(cuid())
+  fundCode    String   // 基金代码
+  date        DateTime // 日期
+  open        Float    // 开盘价
+  high        Float    // 最高价
+  low         Float    // 最低价
+  close       Float    // 收盘价
+  volume      BigInt   // 成交量
+  scale       Int      // K线级别(240为日线)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 创建复合索引以便于查询
+  @@unique([fundCode, date, scale])
+  @@index([fundCode, scale])
+  @@index([date])
+}
+
+// 存储网格策略配置
+model GridStrategy {
+  id                  String    @id @default(cuid())
+  userId              String
+  fundCode            String
+  fundName            String
+  initialPrice        Float
+  strategyType        String    // 'symmetric' 或 'downward'
+  gridMode            String    // 'percentage' 或 'absolute'
+  sellStrategy        String    // 'dynamic' 或 'fixed'
+  gridCount           Int
+  gridWidth           Float
+  absoluteGridWidth   Float?
+  investmentPerGrid   Float
+  enableMediumGrid    Boolean   @default(false)
+  mediumGridMultiplier Float?
+  enableLargeGrid     Boolean   @default(false)
+  largeGridMultiplier Float?
+  retainedProfitsRatio Float    @default(0)
+  maxPercentOfDecline Float?
+  enableMaxDeclineLimit Boolean @default(false)
+  enableIntraDayBacktest Boolean @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  
+  // 关联到用户
+  user                User      @relation(fields: [userId], references: [id])
+
+  // 创建复合索引
+  @@index([userId, fundCode])
+}
+
+// 网格回测结果
+model GridBacktestResult {
+  id                String   @id @default(cuid())
+  strategyId        String   // 关联的网格策略ID
+  startDate         DateTime
+  endDate           DateTime
+  totalInvestment   Float
+  totalValue        Float
+  totalShares       Float
+  totalBuyAmount    Float
+  totalSellAmount   Float
+  totalFees         Float
+  profitAmount      Float
+  profitPercentage  Float
+  transactionCount  Int
+  buyCount          Int
+  sellCount         Int
+  useIntraDayData   Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  
+  // 创建索引
+  @@index([strategyId])
+  
+  // 关联交易记录
+  transactions      GridTransaction[]
+}
+
+// 回测交易记录
+model GridTransaction {
+  id            String   @id @default(cuid())
+  backtestId    String   // 关联的回测结果ID
+  date          DateTime
+  price         Float
+  operation     String   // 'buy', 'sell', 'retained'
+  amount        Float
+  shares        Float
+  gridLevel     Float
+  gridType      String
+  fee           Float
+  buyDate       DateTime?
+  createdAt     DateTime @default(now())
+  
+  // 关联到回测结果
+  backtest      GridBacktestResult @relation(fields: [backtestId], references: [id], onDelete: Cascade)
+  
+  // 创建索引
+  @@index([backtestId])
 } 
