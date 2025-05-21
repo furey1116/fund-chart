@@ -136,8 +136,12 @@ export const getHS300ETFHistoryNetValue = async (
 
 // 计算收益率
 export const calculateReturnRate = (data: FundHistoryNetValue[]): number => {
-  if (!data || data.length < 2) return 0;
+  if (!data || data.length < 2) {
+    console.warn('数据不足，无法计算收益率');
+    return 0;
+  }
   
+  // 按日期从早到晚排序
   const sortedData = [...data].sort(
     (a, b) => new Date(a.FSRQ).getTime() - new Date(b.FSRQ).getTime()
   );
@@ -145,7 +149,18 @@ export const calculateReturnRate = (data: FundHistoryNetValue[]): number => {
   const firstValue = parseFloat(sortedData[0].DWJZ);
   const lastValue = parseFloat(sortedData[sortedData.length - 1].DWJZ);
   
-  return parseFloat(((lastValue / firstValue - 1) * 100).toFixed(2));
+  console.log('收益率计算 - 开始日期:', sortedData[0].FSRQ, '开始净值:', firstValue);
+  console.log('收益率计算 - 结束日期:', sortedData[sortedData.length - 1].FSRQ, '结束净值:', lastValue);
+  
+  if (firstValue <= 0) {
+    console.error('初始净值异常，无法计算收益率');
+    return 0;
+  }
+  
+  const returnRate = parseFloat(((lastValue / firstValue - 1) * 100).toFixed(2));
+  console.log('计算的收益率:', returnRate);
+  
+  return returnRate;
 };
 
 // 导出类型定义
