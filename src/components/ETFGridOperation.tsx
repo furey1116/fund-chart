@@ -56,6 +56,7 @@ interface Transaction {
   key?: number;
   fee?: number;
   buyDate?: string;
+  canSellDate?: string; // 添加可卖出日期字段
 }
 
 interface BacktestResults {
@@ -85,6 +86,15 @@ interface BacktestResults {
   // 添加新字段，分别跟踪总买入金额和总卖出金额
   totalBuyAmount: number;
   totalSellAmount: number;
+  // 添加新字段，用于统计收益和交易次数
+  profitAmount?: number;
+  profitPercentage?: number;
+  buyCount?: number;
+  sellCount?: number;
+  // 添加T+1限制相关字段
+  t1LimitedCount?: number; // T+1限制导致的未执行交易次数
+  availableShares?: number; // 当前可交易份额
+  pendingShares?: number;  // 当前等待T+1后才能交易的份额
 }
 
 // 获取K线数据的函数需要提前声明，以避免使用前声明的错误
@@ -639,16 +649,8 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
         // 使用日内K线数据进行回测
         message.info('正在执行基于日内高低点的网格回测...');
         
-        // 准备请求数据
-        const backTestData = {
-          userId: 'current-user-id', // 实际应用中应该从会话或登录状态获取
-          fundCode,
-          fundName,
-          startDate: backtestDateRange[0],
-          endDate: backtestDateRange[1],
-          useIntraDayData: true,
-          
-          // 策略参数
+        // 准备回测所需的策略和数据
+        const strategy = {
           initialPrice: gridStrategy.initialPrice,
           strategyType,
           gridMode,
@@ -664,41 +666,15 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           retainedProfitsRatio,
           maxPercentOfDecline,
           enableMaxDeclineLimit,
-          enableIntraDayBacktest: true,
-          
-          // 网格点数据
           gridPoints: gridStrategy.gridPoints
         };
         
-        // 调用后端API进行回测
-        const response = await fetch('/api/grid/backtest', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(backTestData)
-        });
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.message || '回测执行失败');
-        }
-        
-        const result = await response.json();
-        
-        // 获取完整的回测结果
-        const detailResponse = await fetch(`/api/grid/backtest/${result.backtestId}`);
-        if (!detailResponse.ok) {
-          throw new Error('获取回测详细结果失败');
-        }
-        
-        const detailResult = await detailResponse.json();
-        
-        // 格式化回测结果
-        const formattedResult = formatBacktestResult(detailResult.data);
+        // 前端本地处理日内回测，不调用后端API
+        // 导入前端版本的回测引擎(如果有的话)或简化实现逻辑
+        const backtestResults = processIntraDayBacktest(strategy, klineData);
         
         // 更新状态
-        setBacktestResults(formattedResult);
+        setBacktestResults(backtestResults);
         setShowBacktest(true);
         
         message.success('日内K线回测完成');
@@ -711,6 +687,383 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
     }
   };
   
+  // 前端实现的日内回测处理逻辑
+  const processIntraDayBacktest = (strategy: any, klineData: any[]): BacktestResults => {
+    const TRANSACTION_FEE_RATE = 0.0003; // 万分之三的手续费率
+    
+    // 初始化回测结果
+    const results: BacktestResults = {
+      totalInvestment: 0,
+      totalValue: 0,
+      totalShares: 0,
+      transactions: [],
+      dates: [],
+      netValues: [],
+      investmentLine: [],
+      valueLine: [],
+      triggerHistory: [],
+      totalFees: 0,
+      totalSellProceeds: 0,
+      totalBuyAmount: 0,
+      totalSellAmount: 0,
+      t1LimitedCount: 0,
+      availableShares: 0, 
+      pendingShares: 0
+    };
+    
+    // 用于跟踪买入记录(用于固定数量卖出策略)
+    const buyRecords: {
+      gridLevel: number;
+      nextSellLevel: number;
+      gridType: string;
+      shares: number;
+      price: number;
+      date: string;
+      canSellDate: string; // 添加可以卖出的日期字段（T+1）
+    }[] = [];
+    
+    // 实现T+1规则：跟踪每日可交易的份额
+    let availableShares = 0; // 当前可卖出的份额
+    let pendingShares = 0;   // 等待T+1后才能卖出的份额
+    let pendingSharesByDate: Record<string, number> = {}; // 按日期记录待解锁的份额
+    let t1LimitedCount = 0;  // T+1限制导致的未执行交易次数
+    
+    // 遍历K线数据进行回测
+    klineData.forEach((kline, index) => {
+      const currentDate = kline.day;
+      const open = parseFloat(kline.open);
+      const high = parseFloat(kline.high);
+      const low = parseFloat(kline.low);
+      const close = parseFloat(kline.close);
+      
+      // 将日期添加到结果中
+      results.dates.push(currentDate);
+      results.netValues.push(close);
+      
+      // 计算T+1：将前一交易日买入的份额添加到可交易份额中
+      if (pendingSharesByDate[currentDate]) {
+        availableShares += pendingSharesByDate[currentDate];
+        pendingShares -= pendingSharesByDate[currentDate];
+        delete pendingSharesByDate[currentDate]; // 清除已处理的记录
+      }
+      
+      // 如果是第一天，只记录初始状态
+      if (index === 0) {
+        results.investmentLine.push(0);
+        results.valueLine.push(0);
+        return;
+      }
+      
+      // 获取前一天的数据
+      const prevKline = klineData[index - 1];
+      const prevClose = parseFloat(prevKline.close);
+      
+      // 可能的价格路径：开盘价 -> 最高价 -> 最低价 -> 收盘价 (先涨后跌)
+      //              或 开盘价 -> 最低价 -> 最高价 -> 收盘价 (先跌后涨)
+      
+      // 判断价格路径
+      // 如果开盘价更接近最高价，可能是先涨后跌
+      // 如果开盘价更接近最低价，可能是先跌后涨
+      const isHighFirst = Math.abs(open - high) < Math.abs(open - low);
+      
+      // 创建当天的触发历史记录
+      const dayTriggerHistory = {
+        date: currentDate,
+        price: close,
+        prevPrice: prevClose,
+        triggers: [] as {
+          gridLevel: number;
+          gridType: string;
+          triggerPrice: number;
+          triggered: boolean;
+          direction: string;
+          operation: string;
+        }[]
+      };
+      
+      // 价格路径模拟：遍历四个价格点
+      const pricePoints = isHighFirst 
+        ? [open, high, low, close]  // 先涨后跌
+        : [open, low, high, close]; // 先跌后涨
+      
+      for (let i = 1; i < pricePoints.length; i++) {
+        const currentPrice = pricePoints[i];
+        const prevPrice = pricePoints[i-1];
+        
+        // 检查是否触发任何网格点位
+        strategy.gridPoints.forEach((point: GridPoint) => {
+          // 判断价格是否从上方或下方穿过网格点
+          const crossedFromAbove = prevPrice > point.price && currentPrice <= point.price;
+          const crossedFromBelow = prevPrice < point.price && currentPrice >= point.price;
+          
+          let operation = '';
+          let triggered = false;
+          let direction = '';
+          
+          if (crossedFromAbove) {
+            operation = '买入';
+            triggered = true;
+            direction = '从上方穿越';
+          } else if (crossedFromBelow) {
+            operation = '卖出';
+            triggered = true;
+            direction = '从下方穿越';
+          }
+          
+          // 记录网格触发历史
+          dayTriggerHistory.triggers.push({
+            gridLevel: point.percentage,
+            gridType: point.gridType || '小网格',
+            triggerPrice: point.price,
+            triggered: triggered,
+            direction: crossedFromAbove ? '从上方穿越' : crossedFromBelow ? '从下方穿越' : '未穿越',
+            operation: operation || point.operation
+          });
+          
+          // 如果触发了网格点，执行相应操作
+          if (triggered) {
+            // 根据网格类型决定投资金额倍数
+            const multiplier = point.gridType === '中网格' ? strategy.mediumGridMultiplier 
+                             : point.gridType === '大网格' ? strategy.largeGridMultiplier
+                             : 1;
+            
+            // 使用网格价格而非当日收盘价
+            const tradePrice = point.price;
+            
+            if (operation === '买入') {
+              // 买入操作
+              const actualInvestment = strategy.investmentPerGrid * multiplier;
+              // 必须按100份整数买入，使用网格价格
+              const shares = Math.floor(actualInvestment / tradePrice / 100) * 100;
+              // 调整实际投资金额
+              const adjustedInvestment = shares * tradePrice;
+              
+              // 计算手续费
+              const fee = adjustedInvestment * TRANSACTION_FEE_RATE;
+              // 更新总手续费
+              results.totalFees += fee;
+              
+              // 更新总买入金额（包含手续费）
+              results.totalBuyAmount += (adjustedInvestment + fee);
+              // 更新净投入（买入总额-卖出总额）
+              results.totalInvestment = results.totalBuyAmount - results.totalSellAmount;
+              
+              // 更新总份额，但标记为不可交易（T+1限制）
+              results.totalShares += shares;
+              pendingShares += shares;
+              
+              // 查找下一个交易日的日期，以实现T+1
+              let nextTradingDateIndex = index + 1;
+              let canSellDate = '';
+              
+              if (nextTradingDateIndex < klineData.length) {
+                canSellDate = klineData[nextTradingDateIndex].day;
+                // 记录在哪个交易日这些份额可以卖出
+                pendingSharesByDate[canSellDate] = (pendingSharesByDate[canSellDate] || 0) + shares;
+              } else {
+                // 如果没有下一个交易日，设置为一个未来日期
+                const tomorrow = new Date(currentDate);
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                canSellDate = tomorrow.toISOString().split('T')[0];
+                pendingSharesByDate[canSellDate] = (pendingSharesByDate[canSellDate] || 0) + shares;
+              }
+              
+              // 记录交易
+              results.transactions.push({
+                date: currentDate,
+                price: tradePrice,  
+                operation: '买入',
+                amount: adjustedInvestment,
+                shares,
+                gridLevel: point.percentage,
+                gridType: point.gridType,
+                fee: fee,
+                buyDate: currentDate,
+                canSellDate: canSellDate
+              });
+              
+              // 记录买入信息，用于固定数量卖出策略
+              if (strategy.sellStrategy === 'fixed') {
+                let nextSellLevel: number;
+                
+                if (strategy.gridMode === 'percentage') {
+                  nextSellLevel = point.percentage + strategy.gridWidth;
+                } else {
+                  const nextPrice = tradePrice + (strategy.absoluteGridWidth || 0.025);
+                  nextSellLevel = ((nextPrice / strategy.initialPrice) - 1) * 100;
+                }
+                
+                buyRecords.push({
+                  gridLevel: point.percentage,
+                  nextSellLevel: nextSellLevel,
+                  gridType: point.gridType || '小网格',
+                  shares: shares,
+                  price: tradePrice,
+                  date: currentDate,
+                  canSellDate: canSellDate // 记录可卖出日期
+                });
+              }
+            } else if (operation === '卖出' && results.totalShares > 0) {
+              // T+1限制检查：只能卖出可交易的份额
+              if (availableShares <= 0) {
+                // 如果没有可交易份额，记录为"触发但未执行"，添加警告信息
+                dayTriggerHistory.triggers[dayTriggerHistory.triggers.length - 1].operation = '卖出(T+1限制未执行)';
+                // 记录T+1限制次数
+                t1LimitedCount++;
+                
+                // 生成一条T+1限制警告交易记录
+                results.transactions.push({
+                  date: currentDate,
+                  price: tradePrice,
+                  operation: '卖出(T+1限制未执行)',
+                  amount: 0,
+                  shares: 0,
+                  gridLevel: point.percentage,
+                  gridType: point.gridType,
+                  fee: 0
+                });
+              } 
+              else if (strategy.sellStrategy === 'dynamic') {
+                // 动态卖出策略 - 以当前持仓份额的一定比例卖出
+                
+                // 基于网格位置计算卖出比例
+                const sellRatio = Math.min(0.5, point.percentage / 100); // 简化的卖出比例计算
+                
+                // 计算卖出份额，但限制为可用份额
+                const sharesToSell = Math.min(
+                  Math.floor(results.totalShares * sellRatio),
+                  availableShares
+                );
+                
+                // 必须按100份整数卖出
+                const adjustedSharesToSell = Math.floor(sharesToSell / 100) * 100;
+                
+                if (adjustedSharesToSell > 0) {
+                  // 计算卖出金额和手续费
+                  const sellAmount = adjustedSharesToSell * tradePrice;
+                  const fee = sellAmount * TRANSACTION_FEE_RATE;
+                  
+                  // 更新总手续费
+                  results.totalFees += fee;
+                  
+                  // 更新卖出所得现金和总卖出金额
+                  results.totalSellProceeds += (sellAmount - fee);
+                  results.totalSellAmount += sellAmount;
+                  
+                  // 更新净投入和持有份额
+                  results.totalInvestment = results.totalBuyAmount - results.totalSellAmount;
+                  results.totalShares -= adjustedSharesToSell;
+                  
+                  // 更新可用份额
+                  availableShares -= adjustedSharesToSell;
+                  
+                  // 记录卖出交易
+                  results.transactions.push({
+                    date: currentDate,
+                    price: tradePrice,
+                    operation: '卖出',
+                    amount: sellAmount,
+                    shares: adjustedSharesToSell,
+                    gridLevel: point.percentage,
+                    gridType: point.gridType,
+                    fee: fee
+                  });
+                }
+              } else if (strategy.sellStrategy === 'fixed') {
+                // 固定数量卖出策略 - 卖出所有达到卖出条件的买入记录
+                
+                // 找出应该在当前网格点卖出的买入记录，但必须考虑T+1限制（只卖出canSellDate <= currentDate的记录）
+                const currentLevel = point.percentage;
+                const matchingBuyRecords = buyRecords.filter(record => 
+                  record.nextSellLevel <= currentLevel && 
+                  record.gridType === (point.gridType || '小网格') &&
+                  record.canSellDate <= currentDate // T+1限制：必须是可交易日期之后
+                );
+                
+                matchingBuyRecords.forEach(buyRecord => {
+                  // 计算卖出份额
+                  const sellShares = Math.floor(buyRecord.shares * (1 - strategy.retainedProfitsRatio));
+                  
+                  // 确保不超过可用份额
+                  const actualSellShares = Math.min(sellShares, availableShares);
+                  
+                  if (actualSellShares > 0) {
+                    // 计算卖出金额和手续费
+                    const sellAmount = actualSellShares * tradePrice;
+                    const fee = sellAmount * TRANSACTION_FEE_RATE;
+                    
+                    // 更新总手续费
+                    results.totalFees += fee;
+                    
+                    // 更新卖出所得现金和总卖出金额
+                    results.totalSellProceeds += (sellAmount - fee);
+                    results.totalSellAmount += sellAmount;
+                    
+                    // 更新净投入和持有份额
+                    results.totalInvestment = results.totalBuyAmount - results.totalSellAmount;
+                    results.totalShares -= actualSellShares;
+                    
+                    // 更新可用份额
+                    availableShares -= actualSellShares;
+                    
+                    // 记录卖出交易
+                    results.transactions.push({
+                      date: currentDate,
+                      price: tradePrice,
+                      operation: '卖出',
+                      amount: sellAmount,
+                      shares: actualSellShares,
+                      gridLevel: point.percentage,
+                      gridType: point.gridType,
+                      fee: fee,
+                      buyDate: buyRecord.date
+                    });
+                    
+                    // 从买入记录中移除
+                    const index = buyRecords.indexOf(buyRecord);
+                    if (index > -1) {
+                      buyRecords.splice(index, 1);
+                    }
+                  }
+                });
+              }
+            }
+          }
+        });
+      }
+      
+      // 添加当天的触发历史到结果中
+      results.triggerHistory.push(dayTriggerHistory);
+      
+      // 更新当前持有份额的市值，使用当天的收盘价
+      results.totalValue = results.totalShares * close;
+      
+      // 记录投资曲线和价值曲线
+      results.investmentLine.push(results.totalInvestment);
+      results.valueLine.push(results.totalValue);
+      
+      // 添加每日份额状态日志
+      console.log(`${currentDate} - 总份额: ${results.totalShares}, 可用份额: ${availableShares}, 待解锁份额: ${pendingShares}`);
+    });
+    
+    // 更新结果中的T+1相关信息
+    results.t1LimitedCount = t1LimitedCount;
+    results.availableShares = availableShares;
+    results.pendingShares = pendingShares;
+    
+    // 计算其他结果指标
+    if (results.totalInvestment > 0) {
+      const actualProfit = results.totalValue - results.totalInvestment;
+      results.profitAmount = actualProfit;
+      results.profitPercentage = (actualProfit / results.totalInvestment) * 100;
+    }
+    
+    results.buyCount = results.transactions.filter(tx => tx.operation === '买入').length;
+    results.sellCount = results.transactions.filter(tx => tx.operation === '卖出').length;
+    
+    return results;
+  };
+
   // 格式化从后端获取的回测结果
   const formatBacktestResult = (data: any): BacktestResults => {
     // 转换后端返回的回测结果为前端使用的格式
@@ -723,7 +1076,8 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       gridLevel: tx.gridLevel,
       gridType: tx.gridType,
       fee: tx.fee,
-      buyDate: tx.buyDate ? new Date(tx.buyDate).toISOString().split('T')[0] : undefined
+      buyDate: tx.buyDate ? new Date(tx.buyDate).toISOString().split('T')[0] : undefined,
+      canSellDate: tx.canSellDate ? new Date(tx.canSellDate).toISOString().split('T')[0] : undefined
     }));
     
     // 准备回测结果
@@ -740,7 +1094,10 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       totalFees: data.totalFees,
       totalSellProceeds: data.totalSellProceeds || 0,
       totalBuyAmount: data.totalBuyAmount,
-      totalSellAmount: data.totalSellAmount
+      totalSellAmount: data.totalSellAmount,
+      t1LimitedCount: data.t1LimitedCount,
+      availableShares: data.availableShares,
+      pendingShares: data.pendingShares
     };
   };
 
@@ -769,7 +1126,10 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       totalFees: 0,        // 总手续费
       totalSellProceeds: 0, // 卖出所得现金（卖出金额-卖出手续费）
       totalBuyAmount: 0,    // 总买入金额（包含手续费）
-      totalSellAmount: 0    // 总卖出金额（不扣除手续费）
+      totalSellAmount: 0,    // 总卖出金额（不扣除手续费）
+      t1LimitedCount: 0,    // T+1限制次数
+      availableShares: 0,   // 可交易份额
+      pendingShares: 0      // 待解锁份额
     };
 
     // 用于跟踪留存份额
@@ -786,7 +1146,14 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       shares: number;
       price: number;
       date: string;
+      canSellDate: string;   // 可卖出日期（T+1）
     }[] = [];
+    
+    // 实现T+1规则：跟踪每日可交易的份额
+    let availableShares = 0; // 当前可卖出的份额
+    let pendingShares = 0;   // 等待T+1后才能卖出的份额
+    let pendingSharesByDate: Record<string, number> = {}; // 按日期记录待解锁的份额
+    let t1LimitedCount = 0;  // T+1限制导致的未执行交易次数
 
     // 按照网格点位进行回测
     sortedData.forEach((item, index) => {
@@ -795,6 +1162,13 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       
       results.dates.push(currentDate);
       results.netValues.push(currentPrice);
+      
+      // 计算T+1：将前一交易日买入的份额添加到可交易份额中
+      if (pendingSharesByDate[currentDate]) {
+        availableShares += pendingSharesByDate[currentDate];
+        pendingShares -= pendingSharesByDate[currentDate];
+        delete pendingSharesByDate[currentDate]; // 清除已处理的记录
+      }
       
       // 如果是第一天，记录初始状态
       if (index === 0) {
@@ -889,10 +1263,25 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
             // 更新净投入（买入总额-卖出总额）
             results.totalInvestment = results.totalBuyAmount - results.totalSellAmount;
             
+            // 更新总份额，但标记为不可交易（T+1限制）
             results.totalShares += shares;
+            pendingShares += shares;
             
             // 新增：更新最低买入价格
             lowestBuyPrice = Math.min(lowestBuyPrice, tradePrice);
+            
+            // 计算可卖出日期（下一个交易日）
+            let canSellDate = '';
+            if (index + 1 < sortedData.length) {
+              canSellDate = sortedData[index + 1].FSRQ;
+              pendingSharesByDate[canSellDate] = (pendingSharesByDate[canSellDate] || 0) + shares;
+            } else {
+              // 如果没有下一个交易日，设置为一个未来日期
+              const tomorrow = new Date(currentDate);
+              tomorrow.setDate(tomorrow.getDate() + 1);
+              canSellDate = tomorrow.toISOString().split('T')[0];
+              pendingSharesByDate[canSellDate] = (pendingSharesByDate[canSellDate] || 0) + shares;
+            }
             
             results.transactions.push({
               date: currentDate,
@@ -903,7 +1292,8 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
               gridLevel: point.percentage,
               gridType: point.gridType,
               fee: fee,  // 记录手续费
-              buyDate: currentDate  // 记录买入日期
+              buyDate: currentDate,  // 记录买入日期
+              canSellDate: canSellDate // 记录可卖出日期
             });
             
             // 记录买入信息，用于固定数量卖出策略
@@ -926,11 +1316,31 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                 gridType: point.gridType || '小网格',
                 shares: shares,
                 price: tradePrice,
-                date: currentDate
+                date: currentDate,
+                canSellDate: canSellDate
               });
             }
           } else if (operation === '卖出' && results.totalShares > 0) {
-            if (sellStrategy === 'dynamic') {
+            // T+1限制检查：只能卖出可交易的份额
+            if (availableShares <= 0) {
+              // 如果没有可交易份额，记录为"触发但未执行"，添加警告信息
+              dayTriggerHistory.triggers[dayTriggerHistory.triggers.length - 1].operation = '卖出(T+1限制未执行)';
+              // 记录T+1限制次数
+              t1LimitedCount++;
+              
+              // 生成一条T+1限制警告交易记录
+              results.transactions.push({
+                date: currentDate,
+                price: tradePrice,
+                operation: '卖出(T+1限制未执行)',
+                amount: 0,
+                shares: 0,
+                gridLevel: point.percentage,
+                gridType: point.gridType,
+                fee: 0
+              });
+            } 
+            else if (sellStrategy === 'dynamic') {
               // 动态卖出策略 - 以最低买入价格作为参考点计算卖出份额
               
               // 计算当前价格相对于最低买入价格的位置
@@ -957,8 +1367,11 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
               // 输出调试信息
               console.log(`卖出点位分析 - 日期: ${currentDate}, 价格: ${tradePrice}, 最低买入价: ${lowestBuyPrice}, 网格位置: ${currentGridPosition}, 卖出比例: ${sellRatio}`);
               
-              // 计算卖出份额
-              const sharesToSell = results.totalShares * sellRatio * multiplier;
+              // 计算卖出份额，但限制为可用份额
+              const sharesToSell = Math.min(
+                results.totalShares * sellRatio * multiplier,
+                availableShares
+              );
               
               // 必须按100份整数卖出
               const adjustedSharesToSell = Math.floor(sharesToSell / 100) * 100;
@@ -1023,6 +1436,9 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                 // 更新净投入（买入总额-卖出总额）
                 results.totalInvestment = results.totalBuyAmount - results.totalSellAmount;
                 
+                // 更新可用份额
+                availableShares -= actualSharesToSell;
+                
                 // 实际卖出操作
                 results.totalShares -= actualSharesToSell;
                 
@@ -1058,11 +1474,12 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
               }
             } else if (sellStrategy === 'fixed') {
               // 固定数量卖出策略 - 卖出所有达到卖出条件的买入记录
-              // 找出所有应该在当前网格点卖出的买入记录
+              // 找出所有应该在当前网格点卖出的买入记录，考虑T+1限制
               const currentLevel = point.percentage;
               const matchingBuyRecords = buyRecords.filter(record => 
                 record.nextSellLevel <= currentLevel && 
-                record.gridType === (point.gridType || '小网格')
+                record.gridType === (point.gridType || '小网格') &&
+                record.canSellDate <= currentDate  // T+1限制检查
               );
               
               if (matchingBuyRecords.length > 0) {
@@ -1072,9 +1489,12 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                   const buyShares = buyRecord.shares;
                   const sellShares = Math.floor(buyShares * (1 - retainedProfitsRatio) / 100) * 100;
                   
-                  if (sellShares > 0 && results.totalShares >= sellShares) {
+                  // 确保不超过可用份额
+                  const actualSellShares = Math.min(sellShares, availableShares);
+                  
+                  if (actualSellShares > 0) {
                     // 使用网格价格计算卖出金额
-                    const sellAmount = sellShares * tradePrice;
+                    const sellAmount = actualSellShares * tradePrice;
                     const buyAmount = buyShares * buyRecord.price;
                     
                     // 计算手续费
@@ -1090,7 +1510,12 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                     // 更新净投入（买入总额-卖出总额）
                     results.totalInvestment = results.totalBuyAmount - results.totalSellAmount;
                     
-                    results.totalShares -= sellShares;
+                    // 更新持仓份额
+                    results.totalShares -= actualSellShares;
+                    
+                    // 更新可用份额
+                    availableShares -= actualSellShares;
+                    
                     // 减少投资金额需要考虑原始买入价格
                     results.totalInvestment -= buyAmount;
                     
@@ -1099,7 +1524,7 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                       price: tradePrice,
                       operation: '卖出',
                       amount: sellAmount,
-                      shares: sellShares,
+                      shares: actualSellShares,
                       gridLevel: point.percentage,
                       gridType: point.gridType,
                       fee: fee,
@@ -1107,7 +1532,7 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                     });
                     
                     // 记录留存利润
-                    const localRetainedShares = buyShares - sellShares;
+                    const localRetainedShares = buyShares - actualSellShares;
                     if (localRetainedShares > 0) {
                       // 修改: 不再将留存利润份额加入totalShares，因为它们已经包含在剩余份额中
                       
@@ -1147,7 +1572,21 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       // 记录投资曲线和价值曲线
       results.investmentLine.push(results.totalInvestment);
       results.valueLine.push(results.totalValue);
+      
+      // 更新T+1相关信息
+      results.availableShares = availableShares;
+      results.pendingShares = pendingShares;
+      
+      // 添加每日份额状态日志
+      console.log(`${currentDate} - 总份额: ${results.totalShares}, 可用份额: ${availableShares}, 待解锁份额: ${pendingShares}`);
     });
+    
+    // 更新最终T+1限制次数
+    results.t1LimitedCount = t1LimitedCount;
+    
+    // 计算买入和卖出次数
+    results.buyCount = results.transactions.filter(tx => tx.operation === '买入').length;
+    results.sellCount = results.transactions.filter(tx => tx.operation === '卖出').length;
     
     setBacktestResults(results);
     setShowBacktest(true);
@@ -1229,7 +1668,7 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       csvContent += `交易记录\n`;
       
       // CSV表头
-      const headers = ['日期', '价格', '操作', '网格类型', '金额(元)', '份额', '买入日期', '网格级别', '手续费(元)'];
+      const headers = ['日期', '价格', '操作', '网格类型', '金额(元)', '份额', '买入日期', '网格级别', '手续费(元)', '可卖出日期'];
       csvContent += headers.join(',') + '\n';
       
       // 转换交易记录为CSV行
@@ -1243,7 +1682,8 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
           tx.shares.toFixed(2),
           tx.buyDate || '',
           `${tx.gridLevel}%`,
-          (tx.fee || 0).toFixed(2)
+          (tx.fee || 0).toFixed(2),
+          tx.canSellDate || ''
         ];
         csvContent += row.join(',') + '\n';
       });
@@ -1379,7 +1819,11 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       key: 'operation',
       render: (text: string) => (
         <Text 
-          type={text === '买入' ? 'success' : text === '卖出' ? 'danger' : 'warning'}
+          type={
+            text === '买入' ? 'success' : 
+            text === '卖出' ? 'danger' : 
+            text.includes('T+1限制') ? 'warning' : 'secondary'
+          }
         >
           {text}
         </Text>
@@ -1414,6 +1858,12 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
       title: '买入日期',
       dataIndex: 'buyDate',
       key: 'buyDate',
+      render: (value: string) => value || '-',
+    },
+    {
+      title: '可卖出日期',
+      dataIndex: 'canSellDate',
+      key: 'canSellDate',
       render: (value: string) => value || '-',
     },
     {
@@ -1937,15 +2387,7 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Card size="small">
                   <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span>累计投入:</span>
-                      <Text strong>
-                        ¥{(() => {
-                          // 使用新的计算方式：总买入金额 - 总卖出金额
-                          return backtestResults.totalBuyAmount.toFixed(2);
-                        })()}
-                      </Text>
-                    </div>
+                    {/* 删除原有的"累计投入"字段 */}
                     <div className="flex justify-between">
                       <span>总买入金额:</span>
                       <Text strong>
@@ -1962,6 +2404,13 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                       <span>净投入金额:</span>
                       <Text strong>
                         ¥{(backtestResults.totalBuyAmount - backtestResults.totalSellAmount).toFixed(2)}
+                      </Text>
+                    </div>
+                    {/* 添加新的"最大投入金额"字段 */}
+                    <div className="flex justify-between">
+                      <span>最大投入金额:</span>
+                      <Text strong>
+                        ¥{Math.max(...backtestResults.investmentLine).toFixed(2)}
                       </Text>
                     </div>
                     <div className="flex justify-between">
@@ -2044,6 +2493,24 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                       </Text>
                     </div>
                     <div className="flex justify-between">
+                      <span>T+1限制次数:</span>
+                      <Text strong type="warning">
+                        {backtestResults.t1LimitedCount || 0}
+                      </Text>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>可用份额:</span>
+                      <Text strong>
+                        {backtestResults.availableShares?.toFixed(2) || 0}
+                      </Text>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>待解锁份额:</span>
+                      <Text strong type="secondary">
+                        {backtestResults.pendingShares?.toFixed(2) || 0}
+                      </Text>
+                    </div>
+                    <div className="flex justify-between">
                       <span>回测周期:</span>
                       <Text strong>
                         {backtestResults.dates.length} 天
@@ -2051,6 +2518,22 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                     </div>
                   </div>
                 </Card>
+                
+                {/* 添加T+1限制说明 */}
+                <Alert
+                  className="mt-4"
+                  message="T+1交易机制说明"
+                  description={
+                    <>
+                      <p>1. 根据证券市场规则，基金买入后需要等到下一个交易日才能卖出（T+1）</p>
+                      <p>2. 本回测已实现T+1限制，当天买入的份额无法在当日卖出</p>
+                      <p>3. 若有交易因T+1限制未执行，会在交易记录中标记为"T+1限制未执行"</p>
+                      <p>4. 待解锁份额：指当前持有但因T+1限制暂时无法卖出的份额</p>
+                    </>
+                  }
+                  type="info"
+                  showIcon
+                />
               </div>
             ),
           },
