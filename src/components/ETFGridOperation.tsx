@@ -102,6 +102,7 @@ const fetchKLineData = async (
   setLoadingKlineData(true);
   
   try {
+    // 确保传递完整的日期参数
     const response = await fetch(
       `/api/fund/kline?fundCode=${fundCode}&startDate=${backtestDateRange[0]}&endDate=${backtestDateRange[1]}`
     );
