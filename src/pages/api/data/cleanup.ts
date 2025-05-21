@@ -96,7 +96,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 清理策略数据
     if (cleanupType === 'strategy' || cleanupType === 'all') {
       // 不能删除与回测关联的策略，所以先找出没有关联回测的策略
-      let deleteCondition = {
+      let deleteCondition: any = {
         userId: userId,
         NOT: {
           gridBacktestResults: {
