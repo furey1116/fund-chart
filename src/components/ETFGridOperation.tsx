@@ -5,7 +5,6 @@ import ReactECharts from 'echarts-for-react';
 import { FundHistoryNetValue } from '@/api/fund';
 import { DownloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import DataManagement from './DataManagement';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -2296,9 +2295,6 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
   return (
     <div className="space-y-4">
       <Title level={4}>{fundName} ({fundCode}) - ETF网格交易策略</Title>
-      
-      {/* 添加数据管理组件 */}
-      <DataManagement fundCode={fundCode} fundName={fundName} />
       
       {strategyPanel}
       {gridResultPanel}

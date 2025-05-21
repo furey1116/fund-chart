@@ -1,72 +1,20 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import prisma from '@/lib/prisma';
+import { PrismaClient } from '@prisma/client';
 import axios from 'axios';
 
-// 批处理配置
-const BATCH_SIZE = 5; // 每批处理数量减少
-const MAX_RETRIES = 3; // 最大重试次数
-const RETRY_DELAY = 2000; // 重试等待时间(毫秒)
+// 使用单例模式，确保在多次请求之间复用同一个Prisma客户端实例
+let prismaInstance: PrismaClient | null = null;
 
-// 辅助函数：延迟执行
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-// 批处理函数，带错误重试
-async function processBatchWithRetry(
-  batch: any[], 
-  fundCode: string, 
-  scale: string | string[] | number
-) {
-  let retries = 0;
-  
-  while (retries < MAX_RETRIES) {
-    try {
-      return await prisma.$transaction(
-        batch.map(item => 
-          prisma.fundKLineData.upsert({
-            where: {
-              fundCode_date_scale: {
-                fundCode: fundCode as string,
-                date: new Date(item.day),
-                scale: Number(scale)
-              }
-            },
-            update: {
-              open: parseFloat(item.open),
-              high: parseFloat(item.high),
-              low: parseFloat(item.low),
-              close: parseFloat(item.close),
-              volume: item.volume ? BigInt(String(item.volume).replace(/\D/g, '') || '0') : BigInt(0),
-            },
-            create: {
-              fundCode: fundCode as string,
-              date: new Date(item.day),
-              scale: Number(scale),
-              open: parseFloat(item.open),
-              high: parseFloat(item.high),
-              low: parseFloat(item.low),
-              close: parseFloat(item.close),
-              volume: item.volume ? BigInt(String(item.volume).replace(/\D/g, '') || '0') : BigInt(0),
-            }
-          })
-        )
-      );
-    } catch (error: any) {
-      retries++;
-      console.error(`批处理尝试 ${retries}/${MAX_RETRIES} 失败: ${error.message}`);
-      
-      // 如果已达到最大重试次数，则抛出错误
-      if (retries >= MAX_RETRIES) {
-        throw error;
-      }
-      
-      // 等待一段时间后重试
-      await delay(RETRY_DELAY);
-    }
+function getPrisma() {
+  if (!prismaInstance) {
+    prismaInstance = new PrismaClient({
+      log: ['error', 'warn'],
+    });
   }
-  
-  // 这一行代码理论上不会执行，因为如果所有重试都失败，会在循环内抛出错误
-  throw new Error('所有批处理重试都失败了');
+  return prismaInstance;
 }
+
+const prisma = getPrisma();
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -116,37 +64,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       klineData = klineData.filter((item: any) => new Date(item.day) >= startDateObj);
     }
 
-    // 优化数据库操作：批量处理但减小批次大小
+    // 优化数据库操作：批量处理而不是并行执行所有请求
+    // 将数据按10条一批进行分组处理
+    const batchSize = 10;
     const totalItems = klineData.length;
     let processedCount = 0;
     const savedData = [];
-    let successCount = 0;
-    let failedCount = 0;
 
-    // 按批次处理数据，但采用串行方式，避免并发过多
-    for (let i = 0; i < totalItems; i += BATCH_SIZE) {
-      const batch = klineData.slice(i, i + BATCH_SIZE);
+    // 使用类型断言来避免TypeScript错误
+    const prismaClient = prisma as any;
+
+    // 按批次处理数据
+    for (let i = 0; i < totalItems; i += batchSize) {
+      const batch = klineData.slice(i, i + batchSize);
       
-      try {
-        const batchResults = await processBatchWithRetry(batch, fundCode as string, scale);
-        savedData.push(...batchResults);
-        successCount += batch.length;
-      } catch (error: any) {
-        console.error(`处理批次 ${i/BATCH_SIZE + 1} 失败:`, error);
-        failedCount += batch.length;
-      }
+      // 在一个事务中批量处理一组数据
+      const batchResults = await prismaClient.$transaction(
+        batch.map((item: any) => 
+          prismaClient.fundKLineData.upsert({
+            where: {
+              fundCode_date_scale: {
+                fundCode: fundCode as string,
+                date: new Date(item.day),
+                scale: Number(scale)
+              }
+            },
+            update: {
+              open: parseFloat(item.open),
+              high: parseFloat(item.high),
+              low: parseFloat(item.low),
+              close: parseFloat(item.close),
+              volume: item.volume ? BigInt(String(item.volume).replace(/\D/g, '') || '0') : BigInt(0),
+            },
+            create: {
+              fundCode: fundCode as string,
+              date: new Date(item.day),
+              scale: Number(scale),
+              open: parseFloat(item.open),
+              high: parseFloat(item.high),
+              low: parseFloat(item.low),
+              close: parseFloat(item.close),
+              volume: item.volume ? BigInt(String(item.volume).replace(/\D/g, '') || '0') : BigInt(0),
+            }
+          })
+        )
+      );
       
+      savedData.push(...batchResults);
       processedCount += batch.length;
-      console.log(`已处理 ${processedCount}/${totalItems} 条K线数据 (成功: ${successCount}, 失败: ${failedCount})`);
-      
-      // 每批次间增加短暂延迟，避免数据库连接压力过大
-      if (i + BATCH_SIZE < totalItems) {
-        await delay(500);
-      }
+      console.log(`已处理 ${processedCount}/${totalItems} 条K线数据`);
     }
 
     return res.status(200).json({ 
-      message: `成功获取并保存了${savedData.length}条K线数据，失败了${failedCount}条`,
+      message: `成功获取并保存了${savedData.length}条K线数据`,
       data: klineData
     });
   } catch (error: any) {
