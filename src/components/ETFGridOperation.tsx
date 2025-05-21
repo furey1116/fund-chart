@@ -102,7 +102,8 @@ const fetchKLineData = async (
   fundCode: string, 
   backtestDateRange: [string, string], 
   setKlineData: React.Dispatch<React.SetStateAction<any[]>>, 
-  setLoadingKlineData: React.Dispatch<React.SetStateAction<boolean>>
+  setLoadingKlineData: React.Dispatch<React.SetStateAction<boolean>>,
+  currentKlineData: any[] = [] // 添加当前klineData作为参数
 ) => {
   if (!fundCode || !backtestDateRange[0] || !backtestDateRange[1]) {
     message.error('请选择回测时间范围');
@@ -112,6 +113,43 @@ const fetchKLineData = async (
   setLoadingKlineData(true);
   
   try {
+    // 先检查传入的currentKlineData中是否已有足够的数据
+    // 获取本地数据的日期范围
+    const localDataStartDate = currentKlineData.length > 0 ? currentKlineData[0].day : '';
+    const localDataEndDate = currentKlineData.length > 0 ? currentKlineData[currentKlineData.length - 1].day : '';
+    
+    // 检查本地数据是否已包含所需日期范围
+    const hasRequiredData = 
+      localDataStartDate && localDataEndDate && 
+      localDataStartDate <= backtestDateRange[0] && 
+      localDataEndDate >= backtestDateRange[1] &&
+      currentKlineData.length > 0;
+      
+    if (hasRequiredData) {
+      message.success('当前已有足够的K线数据，无需重新获取');
+      setLoadingKlineData(false);
+      return;
+    }
+    
+    // 先查询数据库是否已有所需数据
+    const checkResponse = await fetch(
+      `/api/fund/kline?fundCode=${fundCode}&startDate=${backtestDateRange[0]}&endDate=${backtestDateRange[1]}&check=true`
+    );
+    
+    if (!checkResponse.ok) {
+      throw new Error('检查K线数据失败');
+    }
+    
+    const checkResult = await checkResponse.json();
+    
+    // 如果数据库中已有完整的数据
+    if (checkResult.hasData) {
+      setKlineData(checkResult.data);
+      message.success(`成功获取${checkResult.data.length}条K线数据（从数据库）`);
+      setLoadingKlineData(false);
+      return;
+    }
+    
     // 确保传递完整的日期参数
     const response = await fetch(
       `/api/fund/kline?fundCode=${fundCode}&startDate=${backtestDateRange[0]}&endDate=${backtestDateRange[1]}`
@@ -123,7 +161,7 @@ const fetchKLineData = async (
     
     const result = await response.json();
     setKlineData(result.data);
-    message.success(`成功获取${result.data.length}条K线数据`);
+    message.success(`成功获取${result.data.length}条K线数据（从API）`);
   } catch (error: any) {
     message.error(`获取K线数据失败: ${error.message}`);
   } finally {
@@ -2259,7 +2297,7 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                 
                 <Button
                   type="default"
-                  onClick={() => fetchKLineData(fundCode, backtestDateRange, setKlineData, setLoadingKlineData)}
+                  onClick={() => fetchKLineData(fundCode, backtestDateRange, setKlineData, setLoadingKlineData, klineData)}
                   loading={loadingKlineData}
                 >
                   获取K线数据

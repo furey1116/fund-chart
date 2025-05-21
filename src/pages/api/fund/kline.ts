@@ -22,12 +22,63 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { fundCode, scale = 240, datalen = 60, startDate, endDate } = req.query;
+    const { fundCode, scale = 240, datalen = 60, startDate, endDate, check = 'false' } = req.query;
 
     if (!fundCode) {
       return res.status(400).json({ message: '缺少必要参数fundCode' });
     }
 
+    // 检查模式：只查询数据库中是否已有数据，不从外部API获取
+    if (check === 'true' && startDate && endDate) {
+      console.log(`检查数据库中是否存在 ${fundCode} 从 ${startDate} 到 ${endDate} 的K线数据`);
+      
+      // 查询数据库
+      const data = await prisma.fundKLineData.findMany({
+        where: {
+          fundCode: fundCode as string,
+          scale: Number(scale),
+          date: {
+            gte: new Date(startDate as string),
+            lte: new Date(endDate as string)
+          }
+        },
+        orderBy: {
+          date: 'asc'
+        }
+      });
+      
+      // 检查是否有足够的数据
+      // 计算两个日期之间的工作日数量（简单估算，每周5个工作日）
+      const start = new Date(startDate as string);
+      const end = new Date(endDate as string);
+      const diffTime = Math.abs(end.getTime() - start.getTime());
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      // 估算期望的数据条数（考虑到周末和节假日，工作日约为自然日的70%）
+      const expectedRecords = Math.ceil(diffDays * 0.7);
+      
+      // 比较实际获取的数据条数与预期条数
+      const hasEnoughData = data.length >= expectedRecords * 0.9; // 允许10%的误差
+      
+      // 转换数据格式以匹配前端期望的格式
+      const formattedData = data.map(item => ({
+        day: item.date.toISOString().split('T')[0],
+        open: item.open.toString(),
+        high: item.high.toString(),
+        low: item.low.toString(),
+        close: item.close.toString(),
+        volume: item.volume.toString()
+      }));
+      
+      return res.status(200).json({
+        hasData: hasEnoughData,
+        data: formattedData,
+        count: data.length,
+        expectedCount: expectedRecords
+      });
+    }
+
+    // 正常模式：从外部API获取数据并保存到数据库
     // 处理基金代码格式
     let symbol = fundCode as string;
     if (!symbol.startsWith('sh') && !symbol.startsWith('sz')) {
