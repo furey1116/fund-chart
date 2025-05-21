@@ -47,9 +47,9 @@ const BacktestHistory: React.FC<BacktestHistoryProps> = ({ userId }) => {
       // 提取所有不重复的基金代码
       const fundCodes = Array.from(new Set(result.data.map((item: any) => 
         item.strategy?.fundCode
-      ))).filter(Boolean);
+      ))).filter(Boolean) as string[];
       
-      setFundCodeOptions(fundCodes.map((code: string) => {
+      setFundCodeOptions(fundCodes.map((code) => {
         const backtest = result.data.find((item: any) => item.strategy?.fundCode === code);
         return {
           label: `${code} (${backtest?.strategy?.fundName || '未知'})`,
