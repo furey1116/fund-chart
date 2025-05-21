@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Table, InputNumber, Button, Space, Alert, Tabs, Typography, Switch, Select, Radio, message, Modal, Checkbox } from 'antd';
+import { Card, Table, InputNumber, Button, Space, Alert, Tabs, Typography, Switch, Select, Radio, message, Modal, Checkbox, DatePicker } from 'antd';
 import type { TabsProps } from 'antd';
 import ReactECharts from 'echarts-for-react';
 import { FundHistoryNetValue } from '@/api/fund';
 import { DownloadOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
+const { RangePicker } = DatePicker;
 
 // 网格模式类型定义
 type GridModeType = 'percentage' | 'absolute';
@@ -85,6 +87,39 @@ interface BacktestResults {
   totalSellAmount: number;
 }
 
+// 获取K线数据的函数需要提前声明，以避免使用前声明的错误
+const fetchKLineData = async (
+  fundCode: string, 
+  backtestDateRange: [string, string], 
+  setKlineData: React.Dispatch<React.SetStateAction<any[]>>, 
+  setLoadingKlineData: React.Dispatch<React.SetStateAction<boolean>>
+) => {
+  if (!fundCode || !backtestDateRange[0] || !backtestDateRange[1]) {
+    message.error('请选择回测时间范围');
+    return;
+  }
+  
+  setLoadingKlineData(true);
+  
+  try {
+    const response = await fetch(
+      `/api/fund/kline?fundCode=${fundCode}&startDate=${backtestDateRange[0]}&endDate=${backtestDateRange[1]}`
+    );
+    
+    if (!response.ok) {
+      throw new Error('获取K线数据失败');
+    }
+    
+    const result = await response.json();
+    setKlineData(result.data);
+    message.success(`成功获取${result.data.length}条K线数据`);
+  } catch (error: any) {
+    message.error(`获取K线数据失败: ${error.message}`);
+  } finally {
+    setLoadingKlineData(false);
+  }
+};
+
 const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
   fundCode,
   fundName,
@@ -124,6 +159,12 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
 
   // 添加卖出策略类型状态，默认使用固定数量策略
   const [sellStrategy, setSellStrategy] = useState<SellStrategyType>('fixed');
+
+  // 添加日内回测相关状态
+  const [enableIntraDayBacktest, setEnableIntraDayBacktest] = useState<boolean>(false);
+  const [klineData, setKlineData] = useState<any[]>([]);
+  const [backtestDateRange, setBacktestDateRange] = useState<[string, string]>(['', '']);
+  const [loadingKlineData, setLoadingKlineData] = useState<boolean>(false);
 
   // 当净值数据变化时，自动设置初始价格
   useEffect(() => {
@@ -581,7 +622,129 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
   };
 
   // 运行回测
-  const runBacktest = () => {
+  const runBacktest = async () => {
+    if (!gridStrategy) {
+      message.error('请先生成网格策略');
+      return;
+    }
+    
+    if (enableIntraDayBacktest && klineData.length === 0) {
+      message.error('请先获取K线数据');
+      return;
+    }
+    
+    try {
+      if (enableIntraDayBacktest) {
+        // 使用日内K线数据进行回测
+        message.info('正在执行基于日内高低点的网格回测...');
+        
+        // 准备请求数据
+        const backTestData = {
+          userId: 'current-user-id', // 实际应用中应该从会话或登录状态获取
+          fundCode,
+          fundName,
+          startDate: backtestDateRange[0],
+          endDate: backtestDateRange[1],
+          useIntraDayData: true,
+          
+          // 策略参数
+          initialPrice: gridStrategy.initialPrice,
+          strategyType,
+          gridMode,
+          sellStrategy,
+          gridCount,
+          gridWidth,
+          absoluteGridWidth,
+          investmentPerGrid,
+          enableMediumGrid,
+          mediumGridMultiplier,
+          enableLargeGrid,
+          largeGridMultiplier,
+          retainedProfitsRatio,
+          maxPercentOfDecline,
+          enableMaxDeclineLimit,
+          enableIntraDayBacktest: true,
+          
+          // 网格点数据
+          gridPoints: gridStrategy.gridPoints
+        };
+        
+        // 调用后端API进行回测
+        const response = await fetch('/api/grid/backtest', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(backTestData)
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || '回测执行失败');
+        }
+        
+        const result = await response.json();
+        
+        // 获取完整的回测结果
+        const detailResponse = await fetch(`/api/grid/backtest/${result.backtestId}`);
+        if (!detailResponse.ok) {
+          throw new Error('获取回测详细结果失败');
+        }
+        
+        const detailResult = await detailResponse.json();
+        
+        // 格式化回测结果
+        const formattedResult = formatBacktestResult(detailResult.data);
+        
+        // 更新状态
+        setBacktestResults(formattedResult);
+        setShowBacktest(true);
+        
+        message.success('日内K线回测完成');
+      } else {
+        // 使用原有的基于净值的回测逻辑
+        runDailyBacktest();
+      }
+    } catch (error: any) {
+      message.error(`回测执行失败: ${error.message}`);
+    }
+  };
+  
+  // 格式化从后端获取的回测结果
+  const formatBacktestResult = (data: any): BacktestResults => {
+    // 转换后端返回的回测结果为前端使用的格式
+    const transactions = data.transactions.map((tx: any) => ({
+      date: new Date(tx.date).toISOString().split('T')[0],
+      price: tx.price,
+      operation: tx.operation,
+      amount: tx.amount,
+      shares: tx.shares,
+      gridLevel: tx.gridLevel,
+      gridType: tx.gridType,
+      fee: tx.fee,
+      buyDate: tx.buyDate ? new Date(tx.buyDate).toISOString().split('T')[0] : undefined
+    }));
+    
+    // 准备回测结果
+    return {
+      totalInvestment: data.totalInvestment,
+      totalValue: data.totalValue,
+      totalShares: data.totalShares,
+      transactions: transactions,
+      dates: data.dates || [],
+      netValues: data.netValues || [],
+      investmentLine: data.investmentLine || [],
+      valueLine: data.valueLine || [],
+      triggerHistory: data.triggerHistory || [],
+      totalFees: data.totalFees,
+      totalSellProceeds: data.totalSellProceeds || 0,
+      totalBuyAmount: data.totalBuyAmount,
+      totalSellAmount: data.totalSellAmount
+    };
+  };
+
+  // 原有的回测函数改名为runDailyBacktest
+  const runDailyBacktest = () => {
     if (!gridStrategy || !netValueData || netValueData.length === 0) {
       return;
     }
@@ -1607,6 +1770,57 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                 <span className="text-xs text-gray-500">
                   大网格宽度 = 小网格宽度 × {largeGridMultiplier}
                 </span>
+              </div>
+            )}
+          </div>
+        </div>
+        
+        {/* 添加日内回测设置 */}
+        <div className="md:col-span-2">
+          <div className="mb-4">
+            <div className="flex items-center justify-between">
+              <label className="block text-sm font-medium mb-1">使用日内高低点回测</label>
+              <Switch 
+                checked={enableIntraDayBacktest} 
+                onChange={setEnableIntraDayBacktest} 
+              />
+            </div>
+            
+            {enableIntraDayBacktest && (
+              <div className="mt-2 space-y-4">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">回测时间范围</label>
+                  <RangePicker
+                    value={backtestDateRange[0] ? [dayjs(backtestDateRange[0]), dayjs(backtestDateRange[1])] : null}
+                    onChange={(dates) => {
+                      if (dates) {
+                        setBacktestDateRange([
+                          dates[0]?.format('YYYY-MM-DD') || '',
+                          dates[1]?.format('YYYY-MM-DD') || ''
+                        ]);
+                      } else {
+                        setBacktestDateRange(['', '']);
+                      }
+                    }}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+                
+                <Button
+                  type="default"
+                  onClick={() => fetchKLineData(fundCode, backtestDateRange, setKlineData, setLoadingKlineData)}
+                  loading={loadingKlineData}
+                >
+                  获取K线数据
+                </Button>
+                
+                {klineData.length > 0 && (
+                  <Alert
+                    message={`已获取${klineData.length}条K线数据 (${klineData[0].day} 至 ${klineData[klineData.length - 1].day})`}
+                    type="success"
+                    showIcon
+                  />
+                )}
               </div>
             )}
           </div>
