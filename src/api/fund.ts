@@ -122,6 +122,32 @@ export const getFundIncrease = async (fundCode: string, range?: string) => {
   }
 };
 
+// 沪深300ETF基金代码
+export const HS300_ETF_CODE = '510300';
+
+// 获取沪深300ETF历史净值
+export const getHS300ETFHistoryNetValue = async (
+  pageIndex: number = 1,
+  pageSize: number = 200
+) => {
+  // 使用现有的历史净值API，只是使用沪深300ETF的代码
+  return getFundHistoryNetValue(HS300_ETF_CODE, pageIndex, pageSize);
+};
+
+// 计算收益率
+export const calculateReturnRate = (data: FundHistoryNetValue[]): number => {
+  if (!data || data.length < 2) return 0;
+  
+  const sortedData = [...data].sort(
+    (a, b) => new Date(a.FSRQ).getTime() - new Date(b.FSRQ).getTime()
+  );
+  
+  const firstValue = parseFloat(sortedData[0].DWJZ);
+  const lastValue = parseFloat(sortedData[sortedData.length - 1].DWJZ);
+  
+  return parseFloat(((lastValue / firstValue - 1) * 100).toFixed(2));
+};
+
 // 导出类型定义
 export interface FundSearchResult {
   _id: string;
