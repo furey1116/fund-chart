@@ -1,19 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { PrismaClient } from '@prisma/client';
-
-// 使用单例模式，确保在多次请求之间复用同一个Prisma客户端实例
-let prismaInstance: PrismaClient | null = null;
-
-function getPrisma() {
-  if (!prismaInstance) {
-    prismaInstance = new PrismaClient({
-      log: ['error', 'warn'],
-    });
-  }
-  return prismaInstance;
-}
-
-const prisma = getPrisma();
+import prisma from '@/lib/prisma';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
