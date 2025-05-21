@@ -828,8 +828,22 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
         const currentPrice = pricePoints[i];
         const prevPrice = pricePoints[i-1];
         
-        // 检查是否触发任何网格点位
-        strategy.gridPoints.forEach((point: GridPoint) => {
+        // 获取网格点的临时副本，以便排序
+        let tempGridPoints = [...strategy.gridPoints];
+        
+        // 根据价格变动方向调整检查网格点的顺序
+        // 价格上涨时，按照从低到高的顺序检查网格点（模拟条件单的实际触发顺序）
+        // 价格下跌时，按照从高到低的顺序检查网格点
+        if (currentPrice > prevPrice) {
+          // 价格上涨：从低到高排序
+          tempGridPoints.sort((a, b) => a.price - b.price);
+        } else {
+          // 价格下跌：从高到低排序
+          tempGridPoints.sort((a, b) => b.price - a.price);
+        }
+        
+        // 检查是否触发任何网格点位，按照实际市场中条件单触发的顺序
+        for (const point of tempGridPoints) {
           // 判断价格是否从上方或下方穿过网格点
           const crossedFromAbove = prevPrice > point.price && currentPrice <= point.price;
           const crossedFromBelow = prevPrice < point.price && currentPrice >= point.price;
@@ -1008,7 +1022,7 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                   });
                 }
               } else if (strategy.sellStrategy === 'fixed') {
-                // 固定数量卖出策略 - 卖出所有达到卖出条件的买入记录
+                // 固定数量卖出策略 - 卖出所有达到卖出条件的买入记录，但必须考虑T+1限制
                 
                 // 找出应该在当前网格点卖出的买入记录，但必须考虑T+1限制（只卖出canSellDate <= currentDate的记录）
                 const currentLevel = point.percentage;
@@ -1057,7 +1071,7 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
                       buyDate: buyRecord.date
                     });
                     
-                    // 从买入记录中移除
+                    // 从买入记录中移除已售出的记录
                     const index = buyRecords.indexOf(buyRecord);
                     if (index > -1) {
                       buyRecords.splice(index, 1);
@@ -1067,7 +1081,7 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
               }
             }
           }
-        });
+        }
       }
       
       // 添加当天的触发历史到结果中
