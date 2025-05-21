@@ -3,9 +3,8 @@ import { Card, Table, InputNumber, Button, Space, Alert, Tabs, Typography, Switc
 import type { TabsProps } from 'antd';
 import ReactECharts from 'echarts-for-react';
 import { FundHistoryNetValue } from '@/api/fund';
-import { DownloadOutlined, HistoryOutlined } from '@ant-design/icons';
+import { DownloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import Link from 'next/link';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -2295,12 +2294,7 @@ const ETFGridOperation: React.FC<ETFGridOperationProps> = ({
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <Title level={4}>{fundName} ({fundCode}) - ETF网格交易策略</Title>
-        <Link href="/history">
-          <Button type="default" icon={<HistoryOutlined />}>查看历史回测</Button>
-        </Link>
-      </div>
+      <Title level={4}>{fundName} ({fundCode}) - ETF网格交易策略</Title>
       
       {strategyPanel}
       {gridResultPanel}
